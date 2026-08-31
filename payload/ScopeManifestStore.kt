@@ -18,6 +18,8 @@ class ScopeManifestStore(private val context: Context) {
             .put("commit", preview.commitSha)
             .put("totalTracked", preview.totalTrackedFiles)
             .put("validationSummary", preview.validationSummary)
+            .put("rulesText", preview.rulesText)
+            .put("manifestHash", preview.manifestHash)
         val entries = JSONArray()
         preview.manifest.forEach { e ->
             entries.put(JSONObject()
@@ -60,14 +62,18 @@ class ScopeManifestStore(private val context: Context) {
                 ))
             }
         }
-        AuditScopePreview(
+        val preview = AuditScopePreview(
             repoFullName = root.optString("repo"),
             ref = root.optString("ref"),
             commitSha = root.optString("commit"),
             totalTrackedFiles = root.optInt("totalTracked", entries.size),
             manifest = entries,
-            validationSummary = root.optString("validationSummary")
+            validationSummary = root.optString("validationSummary"),
+            rulesText = root.optString("rulesText")
         )
+        val storedHash = root.optString("manifestHash")
+        if (storedHash.isNotBlank() && storedHash != preview.manifestHash) return@runCatching null
+        preview
     }.getOrNull()
 
     fun delete(commitSha: String) { fileFor(commitSha).delete() }
