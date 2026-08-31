@@ -32,6 +32,12 @@ class RepoAuditViewModel(private val app:Application):AndroidViewModel(app) {
     fun loadRepos(){if(_loading.value)return;viewModelScope.launch{_loading.value=true;_message.value=null;try{_repos.value=github.listRepos()}catch(e:Exception){_message.value=e.message?:e.toString()}finally{_loading.value=false}}}
 
     fun scopeRules(repoFullName:String):String=rulesStore.get(repoFullName)
+    fun auditReviewerModels():List<String> = settings.auditReviewerModels()
+    fun auditChairman():String = settings.auditChairman()
+    fun auditAllocationReady():Boolean {
+        val reviewers=settings.auditReviewerModels().filter{it.isNotBlank()}
+        return reviewers.size>=2 && reviewers.distinct().size==reviewers.size && settings.auditChairman().isNotBlank()
+    }
 
     fun previewScope(repo:GitHubRepo,ref:String,customRules:String){
         if(_loading.value)return
@@ -52,20 +58,34 @@ class RepoAuditViewModel(private val app:Application):AndroidViewModel(app) {
         }
     }
 
-    fun validateScope(){val current=_scopePreview.value?:return;if(_loading.value)return;viewModelScope.launch{_loading.value=true;try{val validated=scopeValidator.validate(current){progress->_message.value=progress};_scopePreview.value=validated;scopeStore.save(validated);_message.value=validated.validationSummary}catch(e:Exception){_message.value="Scope validation failed: ${e.message?:e}"}finally{_loading.value=false}}}
+    fun validateScope(){
+        val current=_scopePreview.value?:return
+        if(_loading.value)return
+        if(settings.auditReviewerModels().filter{it.isNotBlank()}.distinct().size<2){
+            _message.value="Scope validation requires at least two allocated Repository Audit reviewers. Configure audit models first."
+            return
+        }
+        viewModelScope.launch{_loading.value=true;try{val validated=scopeValidator.validate(current){progress->_message.value=progress};_scopePreview.value=validated;scopeStore.save(validated);_message.value=validated.validationSummary}catch(e:Exception){_message.value="Scope validation failed: ${e.message?:e}"}finally{_loading.value=false}}
+    }
 
     fun overrideScope(path:String,status:AuditScopeStatus){val current=_scopePreview.value?:return;val updated=current.copy(manifest=current.manifest.map{if(it.path==path)it.copy(status=status,reason="manual user scope decision",confidence=100,decisionSource="user")else it},validationSummary="Manual scope override applied; ${current.manifest.count{it.status==AuditScopeStatus.NEEDS_REVIEW && it.path!=path}} unresolved files remain.");_scopePreview.value=updated;scopeStore.save(updated)}
     fun clearScopePreview(){_scopePreview.value=null}
 
     fun start(repo:GitHubRepo,ref:String){
         if(run.value.stage in listOf(RepoAuditStage.SNAPSHOT,RepoAuditStage.INDEPENDENT,RepoAuditStage.PEER_REVIEW,RepoAuditStage.VERIFY,RepoAuditStage.CHAIRMAN))return
+        val reviewers=settings.auditReviewerModels().filter{it.isNotBlank()}
+        val finalReviewer=settings.auditChairman().trim()
+        if(reviewers.size<2||reviewers.distinct().size!=reviewers.size||finalReviewer.isBlank()){
+            _message.value="Audit blocked: allocate at least two distinct Reviewers and one Chairman / Final Reviewer first."
+            return
+        }
         val p=_scopePreview.value
         if(p==null||p.repoFullName!=repo.fullName||p.ref!=ref.ifBlank{repo.defaultBranch}){_message.value="Analyse the audit scope first.";return}
         if(p.unresolvedFiles>0){_message.value="Audit blocked: ${p.unresolvedFiles} scope entries still need review.";return}
         if(p.requiredFiles<=0){_message.value="Validated scope contains no required files.";return}
         scopeStore.save(p)
         ContextCompat.startForegroundService(app,Intent(app,RepoAuditService::class.java).apply{action=RepoAuditService.ACTION_START;putExtra(RepoAuditService.EXTRA_REPO,repo.fullName);putExtra(RepoAuditService.EXTRA_REF,p.commitSha)})
-        _message.value="Audit pinned to validated manifest at ${p.commitSha.take(12)}"
+        _message.value="Audit pinned to ${p.commitSha.take(12)} with ${reviewers.size} reviewers and Final Reviewer $finalReviewer"
     }
 
     fun cancel(){app.startService(Intent(app,RepoAuditService::class.java).apply{action=RepoAuditService.ACTION_CANCEL})}

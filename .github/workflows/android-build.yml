@@ -29,14 +29,19 @@ jobs:
           git clone --depth 1 --branch tmp-omnicouncil-build https://github.com/EnigmaThe1/autonomous-factory-platform.git /tmp/base
           cp -a /tmp/base/llm-council-mobile/. /tmp/omnicouncil/
           cp payload/app-build.gradle /tmp/omnicouncil/app/build.gradle
+          cp payload/AndroidManifest.xml /tmp/omnicouncil/app/src/main/AndroidManifest.xml
+          cp payload/MainActivity.kt /tmp/omnicouncil/app/src/main/java/com/llmcouncil/mobile/MainActivity.kt
+          cp payload/AuditModelAllocationActivity.kt /tmp/omnicouncil/app/src/main/java/com/llmcouncil/mobile/AuditModelAllocationActivity.kt
+          cp payload/AuditModelAllocationViewModel.kt /tmp/omnicouncil/app/src/main/java/com/llmcouncil/mobile/AuditModelAllocationViewModel.kt
+          cp payload/SecureSettings.kt /tmp/omnicouncil/app/src/main/java/com/llmcouncil/mobile/data/SecureSettings.kt
           cp payload/GitHubClient.kt /tmp/omnicouncil/app/src/main/java/com/llmcouncil/mobile/data/GitHubClient.kt
           cp payload/OpenRouterClient.kt /tmp/omnicouncil/app/src/main/java/com/llmcouncil/mobile/data/OpenRouterClient.kt
           cp payload/AuditModels.kt /tmp/omnicouncil/app/src/main/java/com/llmcouncil/mobile/model/AuditModels.kt
           cp payload/RepoAuditViewModel.kt /tmp/omnicouncil/app/src/main/java/com/llmcouncil/mobile/RepoAuditViewModel.kt
           cp payload/RepoAuditActivity.kt /tmp/omnicouncil/app/src/main/java/com/llmcouncil/mobile/RepoAuditActivity.kt
           cp payload/RepoAuditService.kt /tmp/omnicouncil/app/src/main/java/com/llmcouncil/mobile/RepoAuditService.kt
-          cp payload/ScopeManifestStore.kt /tmp/omnicouncil/app/src/main/java/com/llmcouncil/mobile/data/ScopeManifestStore.kt
           cp payload/AuditScopeRulesStore.kt /tmp/omnicouncil/app/src/main/java/com/llmcouncil/mobile/data/AuditScopeRulesStore.kt
+          cp payload/ScopeManifestStore.kt /tmp/omnicouncil/app/src/main/java/com/llmcouncil/mobile/data/ScopeManifestStore.kt
           cp payload/ScopeValidationEngine.kt /tmp/omnicouncil/app/src/main/java/com/llmcouncil/mobile/domain/ScopeValidationEngine.kt
       - name: Build unsigned release APK
         working-directory: /tmp/omnicouncil
@@ -44,6 +49,6 @@ jobs:
       - name: Upload unsigned APK
         uses: actions/upload-artifact@v4
         with:
-          name: OmniCouncil-v5.5-unsigned
+          name: OmniCouncil-v5.6-unsigned
           path: /tmp/omnicouncil/app/build/outputs/apk/release/app-release-unsigned.apk
           if-no-files-found: error

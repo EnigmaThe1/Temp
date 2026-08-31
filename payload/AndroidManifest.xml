@@ -1,0 +1,16 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
+    <application android:allowBackup="false" android:fullBackupContent="false" android:label="OmniCouncil" android:supportsRtl="true" android:theme="@style/AppTheme" android:usesCleartextTraffic="false">
+        <activity android:name=".MainActivity" android:exported="true" android:label="OmniCouncil">
+            <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
+        </activity>
+        <activity android:name=".RepoAuditActivity" android:exported="false" android:label="Repository Audit" />
+        <activity android:name=".AuditModelAllocationActivity" android:exported="false" android:label="Repository Audit Models" />
+        <service android:name=".CouncilService" android:exported="false" android:foregroundServiceType="dataSync" android:stopWithTask="false" />
+        <service android:name=".RepoAuditService" android:exported="false" android:foregroundServiceType="dataSync" android:stopWithTask="false" />
+    </application>
+</manifest>
