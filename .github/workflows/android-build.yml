@@ -31,12 +31,15 @@ jobs:
           cp payload/app-build.gradle /tmp/omnicouncil/app/build.gradle
           cp payload/GitHubClient.kt /tmp/omnicouncil/app/src/main/java/com/llmcouncil/mobile/data/GitHubClient.kt
           cp payload/OpenRouterClient.kt /tmp/omnicouncil/app/src/main/java/com/llmcouncil/mobile/data/OpenRouterClient.kt
+          cp payload/AuditModels.kt /tmp/omnicouncil/app/src/main/java/com/llmcouncil/mobile/model/AuditModels.kt
+          cp payload/RepoAuditViewModel.kt /tmp/omnicouncil/app/src/main/java/com/llmcouncil/mobile/RepoAuditViewModel.kt
+          cp payload/RepoAuditActivity.kt /tmp/omnicouncil/app/src/main/java/com/llmcouncil/mobile/RepoAuditActivity.kt
       - name: Build unsigned release APK
         working-directory: /tmp/omnicouncil
         run: gradle --no-daemon :app:assembleRelease
       - name: Upload unsigned APK
         uses: actions/upload-artifact@v4
         with:
-          name: OmniCouncil-v5.2-unsigned
+          name: OmniCouncil-v5.3-unsigned
           path: /tmp/omnicouncil/app/build/outputs/apk/release/app-release-unsigned.apk
           if-no-files-found: error
