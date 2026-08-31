@@ -66,6 +66,40 @@ class GitHubClient(private val settings: SecureSettings) {
         AuditScopePreview(repo.fullName, ref, commitSha, manifest.size, entries)
     }
 
+    suspend fun loadScopeSamples(
+        repoFullName:String,
+        commitSha:String,
+        paths:Set<String>,
+        maxCharsPerFile:Int=1600
+    ):Map<String,String> = withContext(Dispatchers.IO) {
+        if(paths.isEmpty()) return@withContext emptyMap()
+        require(settings.getGitHubToken().isNotBlank()) { "GitHub token is not configured" }
+        val safeRepo = repoFullName.split('/').joinToString("/") { encode(it) }
+        val wanted = paths.toMutableSet()
+        val found = linkedMapOf<String,String>()
+        val archive = auth(Request.Builder().url("https://api.github.com/repos/$safeRepo/zipball/$commitSha")).build()
+        http.newCall(archive).execute().use { response ->
+            if (!response.isSuccessful) throw githubError(response.code,response.body?.string().orEmpty())
+            val body = response.body ?: throw IllegalStateException("GitHub returned an empty repository archive")
+            ZipInputStream(body.byteStream().buffered()).use { zip ->
+                var entry = zip.nextEntry
+                while(entry != null && wanted.isNotEmpty()) {
+                    if(!entry.isDirectory) {
+                        val path = entry.name.substringAfter('/',entry.name)
+                        if(path in wanted) {
+                            val bytes = zip.readBytes()
+                            val text = if(bytes.any { it.toInt()==0 }) "<binary/non-text sample>" else String(bytes,StandardCharsets.UTF_8).take(maxCharsPerFile)
+                            found[path]=text
+                            wanted.remove(path)
+                        }
+                    }
+                    zip.closeEntry(); entry=zip.nextEntry
+                }
+            }
+        }
+        found
+    }
+
     suspend fun snapshot(
         repo: GitHubRepo,
         ref: String = repo.defaultBranch,
