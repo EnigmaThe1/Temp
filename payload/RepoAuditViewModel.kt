@@ -18,6 +18,7 @@ class RepoAuditViewModel(private val app:Application):AndroidViewModel(app) {
     private val settings=SecureSettings(app)
     private val github=GitHubClient(settings)
     private val scopeStore=ScopeManifestStore(app)
+    private val rulesStore=AuditScopeRulesStore(app)
     private val scopeValidator=ScopeValidationEngine(OpenRouterClient(settings),settings)
     val run:StateFlow<RepoAuditRun> = RepoAuditRuntime.run
     private val _repos=MutableStateFlow<List<GitHubRepo>>(emptyList()); val repos=_repos.asStateFlow()
@@ -30,7 +31,26 @@ class RepoAuditViewModel(private val app:Application):AndroidViewModel(app) {
     fun saveGitHubToken(v:String){settings.setGitHubToken(v.trim());_scopePreview.value=null;if(v.isNotBlank())loadRepos()}
     fun loadRepos(){if(_loading.value)return;viewModelScope.launch{_loading.value=true;_message.value=null;try{_repos.value=github.listRepos()}catch(e:Exception){_message.value=e.message?:e.toString()}finally{_loading.value=false}}}
 
-    fun previewScope(repo:GitHubRepo,ref:String){if(_loading.value)return;viewModelScope.launch{_loading.value=true;_message.value="Classifying every tracked file…";_scopePreview.value=null;try{val p=github.previewScope(repo,ref.ifBlank{repo.defaultBranch});_scopePreview.value=p;scopeStore.save(p);_message.value="Scope manifest created: ${p.requiredFiles} required, ${p.excludedFiles} excluded, ${p.unresolvedFiles} need review."}catch(e:Exception){_message.value="Scope analysis failed: ${e.message?:e}"}finally{_loading.value=false}}}
+    fun scopeRules(repoFullName:String):String=rulesStore.get(repoFullName)
+
+    fun previewScope(repo:GitHubRepo,ref:String,customRules:String){
+        if(_loading.value)return
+        rulesStore.set(repo.fullName,customRules)
+        viewModelScope.launch{
+            _loading.value=true
+            _message.value="Classifying every tracked file with repository-specific rules…"
+            _scopePreview.value=null
+            try{
+                val p=github.previewScope(repo,ref.ifBlank{repo.defaultBranch},customRules)
+                _scopePreview.value=p
+                scopeStore.save(p)
+                val customCount=p.manifest.count{it.decisionSource=="user-rule"}
+                _message.value="Scope manifest created: ${p.requiredFiles} required, ${p.excludedFiles} excluded, ${p.unresolvedFiles} need review. $customCount file decisions came from custom rules."
+            }catch(e:Exception){
+                _message.value="Scope analysis failed: ${e.message?:e}"
+            }finally{_loading.value=false}
+        }
+    }
 
     fun validateScope(){val current=_scopePreview.value?:return;if(_loading.value)return;viewModelScope.launch{_loading.value=true;try{val validated=scopeValidator.validate(current){progress->_message.value=progress};_scopePreview.value=validated;scopeStore.save(validated);_message.value=validated.validationSummary}catch(e:Exception){_message.value="Scope validation failed: ${e.message?:e}"}finally{_loading.value=false}}}
 

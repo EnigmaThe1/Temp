@@ -36,6 +36,7 @@ jobs:
           cp payload/RepoAuditActivity.kt /tmp/omnicouncil/app/src/main/java/com/llmcouncil/mobile/RepoAuditActivity.kt
           cp payload/RepoAuditService.kt /tmp/omnicouncil/app/src/main/java/com/llmcouncil/mobile/RepoAuditService.kt
           cp payload/ScopeManifestStore.kt /tmp/omnicouncil/app/src/main/java/com/llmcouncil/mobile/data/ScopeManifestStore.kt
+          cp payload/AuditScopeRulesStore.kt /tmp/omnicouncil/app/src/main/java/com/llmcouncil/mobile/data/AuditScopeRulesStore.kt
           cp payload/ScopeValidationEngine.kt /tmp/omnicouncil/app/src/main/java/com/llmcouncil/mobile/domain/ScopeValidationEngine.kt
       - name: Build unsigned release APK
         working-directory: /tmp/omnicouncil
@@ -43,6 +44,6 @@ jobs:
       - name: Upload unsigned APK
         uses: actions/upload-artifact@v4
         with:
-          name: OmniCouncil-v5.4-unsigned
+          name: OmniCouncil-v5.5-unsigned
           path: /tmp/omnicouncil/app/build/outputs/apk/release/app-release-unsigned.apk
           if-no-files-found: error

@@ -55,6 +55,7 @@ private fun RepoAuditScreen(vm:RepoAuditViewModel,onChooseFolder:()->Unit,onBack
     var search by remember { mutableStateOf("") }
     var selected by remember { mutableStateOf<GitHubRepo?>(null) }
     var ref by remember { mutableStateOf("") }
+    var customRules by remember { mutableStateOf("") }
     var showManifest by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit){if(vm.githubConfigured())vm.loadRepos()}
@@ -66,7 +67,7 @@ private fun RepoAuditScreen(vm:RepoAuditViewModel,onChooseFolder:()->Unit,onBack
         actions={IconButton(onClick={showToken=!showToken}){Icon(Icons.Default.Key,"GitHub credential")}}
     )}) { padding ->
         LazyColumn(Modifier.fillMaxSize().padding(padding),contentPadding=PaddingValues(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
-            item { ElevatedCard(Modifier.fillMaxWidth()){Column(Modifier.padding(14.dp)){Text("Exhaustive validated audit contract",fontWeight=FontWeight.Bold);Text("Every tracked file receives an explicit REQUIRED, EXCLUDED or NEEDS REVIEW decision. The exhaustive audit is blocked until the frozen manifest has zero unresolved entries.",style=MaterialTheme.typography.bodySmall)}} }
+            item { ElevatedCard(Modifier.fillMaxWidth()){Column(Modifier.padding(14.dp)){Text("Exhaustive validated audit contract",fontWeight=FontWeight.Bold);Text("Every tracked file receives an explicit REQUIRED, EXCLUDED or NEEDS REVIEW decision. Repository-specific include/exclude rules are applied before AI validation, and the exhaustive audit is blocked until the frozen manifest has zero unresolved entries.",style=MaterialTheme.typography.bodySmall)}} }
             if(showToken) item { ElevatedCard(Modifier.fillMaxWidth()){Column(Modifier.padding(14.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){Text("GitHub credential",fontWeight=FontWeight.Bold);Text("Use a fine-grained GitHub personal access token with read access. It is encrypted with Android Keystore.",style=MaterialTheme.typography.bodySmall);OutlinedTextField(token,{token=it},Modifier.fillMaxWidth(),label={Text("GitHub token")},visualTransformation=PasswordVisualTransformation(),singleLine=true);Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){Button(onClick={vm.saveGitHubToken(token);token="";showToken=false}){Text("Save")};if(vm.githubConfigured())OutlinedButton(onClick=vm::loadRepos){Text("Reload repos")}}}} }
             item { ElevatedCard(Modifier.fillMaxWidth()){Column(Modifier.padding(14.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){Text("Export workspace",fontWeight=FontWeight.Bold);Text(if(vm.exportTree()!=null) "Folder access configured" else "No folder selected",style=MaterialTheme.typography.bodySmall);OutlinedButton(onClick=onChooseFolder){Icon(Icons.Default.CreateNewFolder,null);Spacer(Modifier.width(4.dp));Text("Choose / create folder")};Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){Button(onClick=vm::exportCurrent,enabled=run.repoFullName.isNotBlank()){Text("Export audit")};OutlinedButton(onClick=vm::exportLastCouncil){Text("Export last council")}}}} }
             if(loading)item{LinearProgressIndicator(Modifier.fillMaxWidth())}
@@ -82,10 +83,27 @@ private fun RepoAuditScreen(vm:RepoAuditViewModel,onChooseFolder:()->Unit,onBack
                 val filtered=repos.filter{search.isBlank()||it.fullName.contains(search,true)||it.description.contains(search,true)}
                 items(filtered,key={it.fullName}) { repo ->
                     ElevatedCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(12.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
-                        Row(verticalAlignment=Alignment.CenterVertically){Icon(if(repo.privateRepo) Icons.Default.Lock else Icons.Default.Public,null);Spacer(Modifier.width(8.dp));Column(Modifier.weight(1f)){Text(repo.fullName,fontWeight=FontWeight.SemiBold);Text("default: ${repo.defaultBranch}",style=MaterialTheme.typography.labelSmall)};Button(onClick={selected=repo;ref=repo.defaultBranch;vm.clearScopePreview()}){Text("Select")}}
+                        Row(verticalAlignment=Alignment.CenterVertically){
+                            Icon(if(repo.privateRepo) Icons.Default.Lock else Icons.Default.Public,null)
+                            Spacer(Modifier.width(8.dp))
+                            Column(Modifier.weight(1f)){Text(repo.fullName,fontWeight=FontWeight.SemiBold);Text("default: ${repo.defaultBranch}",style=MaterialTheme.typography.labelSmall)}
+                            Button(onClick={selected=repo;ref=repo.defaultBranch;customRules=vm.scopeRules(repo.fullName);vm.clearScopePreview()}){Text("Select")}
+                        }
                         if(selected?.fullName==repo.fullName){
                             OutlinedTextField(ref,{ref=it;vm.clearScopePreview()},Modifier.fillMaxWidth(),label={Text("Branch / tag / commit")},singleLine=true)
-                            Button(onClick={vm.previewScope(repo,ref)},enabled=!loading,modifier=Modifier.fillMaxWidth()){Icon(Icons.Default.Rule,null);Spacer(Modifier.width(6.dp));Text("Analyse audit scope")}
+                            OutlinedTextField(
+                                value=customRules,
+                                onValueChange={customRules=it;vm.clearScopePreview()},
+                                modifier=Modifier.fillMaxWidth(),
+                                label={Text("Custom audit scope rules")},
+                                placeholder={Text("exclude: .dev/**\nexclude: docs/archive/**\ninclude: backend/migrations/**")},
+                                supportingText={Text("One rule per line. Use include: <glob> or exclude: <glob>. Rules are saved for this repository. Last matching rule wins.")},
+                                minLines=4,
+                                maxLines=8
+                            )
+                            Button(onClick={vm.previewScope(repo,ref,customRules)},enabled=!loading,modifier=Modifier.fillMaxWidth()){
+                                Icon(Icons.Default.Rule,null);Spacer(Modifier.width(6.dp));Text("Analyse audit scope")
+                            }
                             val preview=scopePreview?.takeIf{it.repoFullName==repo.fullName&&it.ref==ref.ifBlank{repo.defaultBranch}}
                             if(preview!=null){
                                 ScopePreviewCard(preview,onView={showManifest=true})
@@ -102,10 +120,12 @@ private fun RepoAuditScreen(vm:RepoAuditViewModel,onChooseFolder:()->Unit,onBack
 
 @Composable
 private fun ScopePreviewCard(preview:AuditScopePreview,onView:()->Unit){
+    val customDecisions=preview.manifest.count{it.decisionSource=="user-rule"}
     ElevatedCard(Modifier.fillMaxWidth(),colors=CardDefaults.elevatedCardColors(containerColor=MaterialTheme.colorScheme.surfaceVariant)){Column(Modifier.padding(12.dp),verticalArrangement=Arrangement.spacedBy(5.dp)){
         Text("Audit scope manifest",fontWeight=FontWeight.Bold)
         Text("Commit: ${preview.commitSha.take(12)}",style=MaterialTheme.typography.labelSmall)
         Text("${preview.totalTrackedFiles} tracked · ${preview.requiredFiles} required · ${preview.excludedFiles} excluded · ${preview.unresolvedFiles} need review",style=MaterialTheme.typography.bodySmall)
+        if(customDecisions>0)Text("$customDecisions decisions enforced by repository-specific rules",style=MaterialTheme.typography.bodySmall,fontWeight=FontWeight.SemiBold)
         if(preview.requiredByCategory.isNotEmpty()){Text("Required",fontWeight=FontWeight.SemiBold,style=MaterialTheme.typography.bodySmall);preview.requiredByCategory.entries.sortedByDescending{it.value}.forEach{(k,v)->Text("• $k: $v",style=MaterialTheme.typography.labelSmall)}}
         if(preview.validationSummary.isNotBlank())Text(preview.validationSummary,style=MaterialTheme.typography.bodySmall,color=if(preview.unresolvedFiles==0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
         OutlinedButton(onClick=onView,modifier=Modifier.fillMaxWidth()){Icon(Icons.Default.List,null);Spacer(Modifier.width(6.dp));Text("Inspect all ${preview.totalTrackedFiles} file decisions")}

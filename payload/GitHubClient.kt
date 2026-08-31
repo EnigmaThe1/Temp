@@ -25,7 +25,8 @@ class GitHubClient(private val settings: SecureSettings) {
 
     private data class TreeMeta(val path:String,val sha:String,val size:Long)
     private data class PendingTree(val prefix:String,val sha:String)
-    private data class ScopeDecision(val status:AuditScopeStatus,val category:String,val reason:String,val confidence:Int)
+    private data class ScopeDecision(val status:AuditScopeStatus,val category:String,val reason:String,val confidence:Int,val source:String="deterministic")
+    private data class CustomRule(val include:Boolean,val pattern:String,val regex:Regex,val sourceLine:String)
 
     private fun auth(builder: Request.Builder): Request.Builder {
         val token = settings.getGitHubToken()
@@ -50,16 +51,17 @@ class GitHubClient(private val settings: SecureSettings) {
         out.distinctBy { it.fullName }.sortedBy { it.fullName.lowercase() }
     }
 
-    suspend fun previewScope(repo: GitHubRepo, ref: String = repo.defaultBranch): AuditScopePreview = withContext(Dispatchers.IO) {
+    suspend fun previewScope(repo: GitHubRepo, ref: String = repo.defaultBranch, customRulesText: String = ""): AuditScopePreview = withContext(Dispatchers.IO) {
         require(settings.getGitHubToken().isNotBlank()) { "GitHub token is not configured" }
         val safeRepo = repo.fullName.split('/').joinToString("/") { encode(it) }
         val (commitSha, treeSha) = resolveCommitAndTree(safeRepo, ref)
         val manifest = loadCompleteTreeManifest(safeRepo, treeSha)
         val gitIgnore = manifest.firstOrNull { it.path == ".gitignore" }?.let { loadBlobText(safeRepo, it.sha) }.orEmpty()
         val matcher = GitIgnoreMatcher(gitIgnore)
+        val customRules = parseCustomRules(customRulesText)
         val entries = manifest.map { item ->
-            val d = classifyScope(item.path, item.size, matcher)
-            AuditScopeEntry(item.path,item.sha,item.size,d.category,d.status,d.reason,d.confidence,"deterministic")
+            val d = classifyScope(item.path, item.size, matcher, customRules)
+            AuditScopeEntry(item.path,item.sha,item.size,d.category,d.status,d.reason,d.confidence,d.source)
         }
         AuditScopePreview(repo.fullName, ref, commitSha, manifest.size, entries)
     }
@@ -120,24 +122,29 @@ class GitHubClient(private val settings: SecureSettings) {
         RepoSnapshot(repo,ref,commitSha,required.keys.map { found.getValue(it) },excluded.sortedBy { it.path })
     }
 
-    private fun classifyScope(path:String,size:Long,ignore:GitIgnoreMatcher):ScopeDecision {
+    private fun classifyScope(path:String,size:Long,ignore:GitIgnoreMatcher,customRules:List<CustomRule>):ScopeDecision {
         val lower = path.lowercase().replace('\\','/')
         val segments = lower.split('/')
         val name = segments.lastOrNull().orEmpty()
         val tail = name.substringAfterLast('.',"")
         val ext = if (tail == name) "" else ".$tail"
-        fun excluded(category:String,reason:String,confidence:Int=99)=ScopeDecision(AuditScopeStatus.EXCLUDED,category,reason,confidence)
-        fun required(category:String,reason:String,confidence:Int=98)=ScopeDecision(AuditScopeStatus.REQUIRED,category,reason,confidence)
-        fun review(category:String,reason:String,confidence:Int=50)=ScopeDecision(AuditScopeStatus.NEEDS_REVIEW,category,reason,confidence)
+        fun excluded(category:String,reason:String,confidence:Int=99,source:String="deterministic")=ScopeDecision(AuditScopeStatus.EXCLUDED,category,reason,confidence,source)
+        fun required(category:String,reason:String,confidence:Int=98,source:String="deterministic")=ScopeDecision(AuditScopeStatus.REQUIRED,category,reason,confidence,source)
+        fun review(category:String,reason:String,confidence:Int=50)=ScopeDecision(AuditScopeStatus.NEEDS_REVIEW,category,reason,confidence,"deterministic")
 
         if (size > 1_000_000) return excluded("excluded-large","file exceeds 1 MB audit ingestion limit")
         val binary = setOf(".png",".jpg",".jpeg",".gif",".webp",".ico",".pdf",".zip",".gz",".7z",".jar",".aar",".apk",".so",".dll",".exe",".bin",".mp3",".wav",".flac",".mp4",".mov",".avi",".woff",".woff2",".ttf",".otf",".class",".pyc",".pyo",".o",".a",".dylib",".map",".sqlite",".sqlite3",".db",".db-shm",".db-wal")
         if (ext in binary) return excluded("excluded-binary","binary/generated/non-source file type")
         if (lower.endsWith(".min.js") || lower.endsWith(".min.css")) return excluded("excluded-generated","generated/minified asset")
 
+        customRules.lastOrNull { it.regex.matches(lower) }?.let { rule ->
+            return if (rule.include) required("custom-required","included by repository-specific rule: ${rule.sourceLine}",100,"user-rule")
+            else excluded("custom-excluded","excluded by repository-specific rule: ${rule.sourceLine}",100,"user-rule")
+        }
+
         val generatedDirs = setOf(".git","node_modules","vendor","dist","dist-ssr","build",".gradle",".idea","coverage","target","pods",".venv","venv","env","__pycache__",".pytest_cache",".mypy_cache",".ruff_cache",".tox",".next",".nuxt",".svelte-kit",".parcel-cache",".turbo",".cache",".uv-cache","site-packages","bin","obj","generated","generated-src","playwright-report","allure-results","test-results")
         if (segments.any { it in generatedDirs }) return excluded("excluded-generated","generated/vendor/cache directory")
-        if (lower.startsWith(".dev/") || lower.startsWith("investigation/") || lower.contains("/generated-evidence/") || lower.contains("/audit-evidence/") || lower.contains("/historical-evidence/") || lower.contains("/forensics/") || lower.contains("/forensic-output/")) return excluded("excluded-historical-evidence","historical/diagnostic evidence workspace")
+        if (lower.startsWith(".dev/") || lower == ".dev" || lower.startsWith("investigation/") || lower.contains("/generated-evidence/") || lower.contains("/audit-evidence/") || lower.contains("/historical-evidence/") || lower.contains("/forensics/") || lower.contains("/forensic-output/")) return excluded("excluded-historical-evidence","historical/diagnostic evidence workspace")
         if (ignore.isIgnored(lower)) return excluded("excluded-repository-ignored","matches repository .gitignore")
 
         val sourceExt = setOf(".kt",".kts",".java",".py",".pyi",".js",".jsx",".mjs",".cjs",".ts",".tsx",".go",".rs",".c",".h",".hpp",".cpp",".cc",".cs",".rb",".php",".swift",".dart",".scala",".sh",".bash",".zsh",".fish",".ps1",".sql",".proto",".graphql",".gql",".vue",".svelte",".html",".htm",".css",".scss",".sass",".less")
@@ -172,6 +179,37 @@ class GitHubClient(private val settings: SecureSettings) {
         if (ext in dataExt) return excluded("excluded-data","runtime/fixture/dataset file type")
         if (ext == ".txt") return review("documentation","plain text may be canonical documentation or generated/report output")
         return review("unclassified","file is not safely classifiable from deterministic repository metadata")
+    }
+
+    private fun parseCustomRules(text:String):List<CustomRule> = text.lineSequence().mapIndexedNotNull { index, raw ->
+        val line = raw.trim()
+        if (line.isBlank() || line.startsWith("#")) return@mapIndexedNotNull null
+        val lower = line.lowercase()
+        val include = when {
+            lower.startsWith("include:") -> true
+            lower.startsWith("exclude:") -> false
+            line.startsWith("+") -> true
+            line.startsWith("-") -> false
+            else -> throw IllegalArgumentException("Invalid custom scope rule on line ${index + 1}. Use include: <glob> or exclude: <glob>.")
+        }
+        var pattern = when {
+            lower.startsWith("include:") || lower.startsWith("exclude:") -> line.substringAfter(':').trim()
+            else -> line.drop(1).trim()
+        }.replace('\\','/').removePrefix("/")
+        if (pattern.isBlank()) throw IllegalArgumentException("Empty custom scope pattern on line ${index + 1}")
+        if (!pattern.contains('*') && !pattern.contains('?') && !pattern.substringAfterLast('/').contains('.')) pattern = pattern.trimEnd('/') + "/**"
+        CustomRule(include,pattern,Regex("^${globToRegex(pattern.lowercase())}$"),line)
+    }.toList()
+
+    private fun globToRegex(glob:String):String {
+        val out=StringBuilder(); var i=0
+        while(i<glob.length){ when(val c=glob[i]){
+            '*'->{ if(i+1<glob.length&&glob[i+1]=='*'){out.append(".*");i++}else out.append("[^/]*") }
+            '?'->out.append("[^/]")
+            '.', '(', ')', '+', '|', '^', '$', '@', '%', '[', ']', '{', '}' -> out.append('\\').append(c)
+            else->out.append(c)
+        }; i++ }
+        return out.toString()
     }
 
     private fun resolveCommitAndTree(safeRepo:String,ref:String):Pair<String,String> {
