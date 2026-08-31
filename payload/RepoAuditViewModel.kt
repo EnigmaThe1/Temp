@@ -9,118 +9,26 @@ import androidx.lifecycle.viewModelScope
 import com.llmcouncil.mobile.data.*
 import com.llmcouncil.mobile.domain.ScopeValidationEngine
 import com.llmcouncil.mobile.model.*
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import kotlin.math.ceil
 
 class RepoAuditViewModel(private val app:Application):AndroidViewModel(app) {
-    private val settings=SecureSettings(app)
-    private val github=GitHubClient(settings)
-    private val scopeStore=ScopeManifestStore(app)
-    private val rulesStore=AuditScopeRulesStore(app)
-    private val scopeValidator=ScopeValidationEngine(OpenRouterClient(settings),settings,github)
+    private val settings=SecureSettings(app);private val github=GitHubClient(settings);private val refs=GitHubRefsClient(settings);private val scopeStore=ScopeManifestStore(app);private val rulesStore=AuditScopeRulesStore(app);private val scopeValidator=ScopeValidationEngine(OpenRouterClient(settings),settings,github);private val historyDb=RepoAuditHistoryDb(app)
     val run:StateFlow<RepoAuditRun> = RepoAuditRuntime.run
-    private val _repos=MutableStateFlow<List<GitHubRepo>>(emptyList()); val repos=_repos.asStateFlow()
-    private val _loading=MutableStateFlow(false); val loading=_loading.asStateFlow()
-    private val _message=MutableStateFlow<String?>(null); val message=_message.asStateFlow()
-    private val _scopePreview=MutableStateFlow<AuditScopePreview?>(null); val scopePreview=_scopePreview.asStateFlow()
-    private val _auditAllocationVersion=MutableStateFlow(0); val auditAllocationVersion=_auditAllocationVersion.asStateFlow()
-    init { RepoAuditRuntime.initialise(app); CouncilRuntime.initialise(app) }
-
-    fun githubConfigured()=settings.getGitHubToken().isNotBlank()
-    fun saveGitHubToken(v:String){settings.setGitHubToken(v.trim());_scopePreview.value=null;if(v.isNotBlank())loadRepos()}
-    fun loadRepos(){if(_loading.value)return;viewModelScope.launch{_loading.value=true;_message.value=null;try{_repos.value=github.listRepos()}catch(e:Exception){_message.value=e.message?:e.toString()}finally{_loading.value=false}}}
-
-    fun scopeRules(repoFullName:String):String=rulesStore.get(repoFullName)
-    fun auditReviewerModels():List<String> = settings.auditReviewerModels().filter{it.isNotBlank()}
-    fun auditChairman():String = settings.auditChairman()
-    fun refreshAuditAllocation(){_auditAllocationVersion.value=_auditAllocationVersion.value+1}
-    fun auditAllocationReady():Boolean {
-        val reviewers=auditReviewerModels()
-        return reviewers.size>=2 && reviewers.distinct().size==reviewers.size && auditChairman().isNotBlank()
-    }
-
-    fun prepareScope(repo:GitHubRepo,ref:String,customRules:String){
-        if(_loading.value)return
-        if(!auditAllocationReady()){
-            _message.value="Configure the Repository Audit review team first: at least two distinct Reviewers and one Chairman / Final Reviewer."
-            return
-        }
-        rulesStore.set(repo.fullName,customRules)
-        viewModelScope.launch{
-            _loading.value=true
-            _scopePreview.value=null
-            try{
-                _message.value="Step 1/2 · Mapping tracked files and applying repository rules…"
-                val deterministic=github.previewScope(repo,ref.ifBlank{repo.defaultBranch},customRules)
-                _scopePreview.value=deterministic
-                scopeStore.save(deterministic)
-                if(deterministic.unresolvedFiles==0){
-                    val ready=deterministic.copy(validationSummary="Automatic scope preparation complete: deterministic rules resolved every tracked file.")
-                    _scopePreview.value=ready;scopeStore.save(ready);_message.value=ready.validationSummary
-                }else{
-                    _message.value="Step 2/2 · AI is classifying ${deterministic.unresolvedFiles} ambiguous files by family using representative samples…"
-                    val prepared=scopeValidator.validate(deterministic){progress->_message.value=progress}
-                    _scopePreview.value=prepared
-                    scopeStore.save(prepared)
-                    _message.value=prepared.validationSummary
-                }
-            }catch(e:Exception){
-                _message.value="Automatic scope preparation failed: ${e.message?:e}"
-            }finally{_loading.value=false}
-        }
-    }
-
-    fun retryAutomaticScope(){
-        val current=_scopePreview.value?:return
-        if(_loading.value||current.unresolvedFiles==0)return
-        viewModelScope.launch{
-            _loading.value=true
-            try{
-                _message.value="Retrying automatic AI scope preparation for ${current.unresolvedFiles} unresolved files…"
-                val prepared=scopeValidator.validate(current){progress->_message.value=progress}
-                _scopePreview.value=prepared;scopeStore.save(prepared);_message.value=prepared.validationSummary
-            }catch(e:Exception){_message.value="Automatic scope retry failed: ${e.message?:e}"}
-            finally{_loading.value=false}
-        }
-    }
-
-    fun previewScope(repo:GitHubRepo,ref:String,customRules:String)=prepareScope(repo,ref,customRules)
-    fun validateScope()=retryAutomaticScope()
-
-    fun overrideScope(path:String,status:AuditScopeStatus){
-        val current=_scopePreview.value?:return
-        val updated=current.copy(
-            manifest=current.manifest.map{if(it.path==path)it.copy(status=status,reason="manual advanced scope override",confidence=100,decisionSource="user")else it},
-            validationSummary="Advanced scope override applied. ${current.manifest.count{it.status==AuditScopeStatus.NEEDS_REVIEW&&it.path!=path}} unresolved files remain."
-        )
-        _scopePreview.value=updated;scopeStore.save(updated)
-    }
-    fun clearScopePreview(){_scopePreview.value=null}
-
-    fun start(repo:GitHubRepo,ref:String){
-        if(run.value.stage in listOf(RepoAuditStage.SNAPSHOT,RepoAuditStage.INDEPENDENT,RepoAuditStage.PEER_REVIEW,RepoAuditStage.VERIFY,RepoAuditStage.CHAIRMAN))return
-        val reviewers=auditReviewerModels()
-        val finalReviewer=auditChairman().trim()
-        if(reviewers.size<2||reviewers.distinct().size!=reviewers.size||finalReviewer.isBlank()){
-            _message.value="Audit blocked: allocate at least two distinct Reviewers and one Chairman / Final Reviewer first."
-            return
-        }
-        val p=_scopePreview.value
-        if(p==null||p.repoFullName!=repo.fullName||p.ref!=ref.ifBlank{repo.defaultBranch}){_message.value="Prepare the automatic audit scope first.";return}
-        if(p.unresolvedFiles>0){_message.value="Audit blocked: automatic scope preparation still has ${p.unresolvedFiles} unresolved files. Retry preparation rather than reviewing them manually.";return}
-        if(p.requiredFiles<=0){_message.value="Validated scope contains no required files.";return}
-        scopeStore.save(p)
-        ContextCompat.startForegroundService(app,Intent(app,RepoAuditService::class.java).apply{action=RepoAuditService.ACTION_START;putExtra(RepoAuditService.EXTRA_REPO,repo.fullName);putExtra(RepoAuditService.EXTRA_REF,p.commitSha)})
-        _message.value="Audit pinned to ${p.commitSha.take(12)} with ${reviewers.size} reviewers and Final Reviewer $finalReviewer"
-    }
-
-    fun cancel(){app.startService(Intent(app,RepoAuditService::class.java).apply{action=RepoAuditService.ACTION_CANCEL})}
-    fun clear(){RepoAuditRuntime.clear(app)}
-    fun setExportTree(uri:Uri){settings.setExportTreeUri(uri.toString());_message.value="Export workspace saved"}
-    fun exportTree():Uri?=settings.exportTreeUri()?.let(Uri::parse)
-    fun exportCurrent(){val uri=exportTree();if(uri==null){_message.value="Choose an export workspace folder first";return};val current=run.value;if(current.repoFullName.isBlank()){_message.value="No repository audit is available to export";return};viewModelScope.launch{_loading.value=true;try{_message.value="Exported repository audit to "+withContext(Dispatchers.IO){ExportManager.exportRepoAudit(app,uri,current)}}catch(e:Exception){_message.value="Export failed: ${e.message?:e}"}finally{_loading.value=false}}}
-    fun exportLastCouncil(){val uri=exportTree();if(uri==null){_message.value="Choose an export workspace folder first";return};val council=CouncilRuntime.run.value;if(council.question.isBlank()){_message.value="No standard council run is available to export";return};viewModelScope.launch{_loading.value=true;try{_message.value="Exported council run to "+withContext(Dispatchers.IO){ExportManager.exportCouncilRun(app,uri,council)}}catch(e:Exception){_message.value="Council export failed: ${e.message?:e}"}finally{_loading.value=false}}}
-    fun clearMessage(){_message.value=null}
+    private val _repos=MutableStateFlow<List<GitHubRepo>>(emptyList());val repos=_repos.asStateFlow();private val _branches=MutableStateFlow<List<String>>(emptyList());val branches=_branches.asStateFlow();private val _history=MutableStateFlow<List<RepoAuditHistoryItem>>(emptyList());val history=_history.asStateFlow();private val _loading=MutableStateFlow(false);val loading=_loading.asStateFlow();private val _message=MutableStateFlow<String?>(null);val message=_message.asStateFlow();private val _scopePreview=MutableStateFlow<AuditScopePreview?>(null);val scopePreview=_scopePreview.asStateFlow();private val _preflight=MutableStateFlow<AuditPreflight?>(null);val preflight=_preflight.asStateFlow();private val _auditAllocationVersion=MutableStateFlow(0);val auditAllocationVersion=_auditAllocationVersion.asStateFlow();private val _privacyConfirmed=MutableStateFlow(false);val privacyConfirmed=_privacyConfirmed.asStateFlow();private var scopeJob:Job?=null
+    init{RepoAuditRuntime.initialise(app);CouncilRuntime.initialise(app);loadHistory()}
+    fun githubConfigured()=settings.getGitHubToken().isNotBlank();fun saveGitHubToken(v:String){settings.setGitHubToken(v.trim());_scopePreview.value=null;_preflight.value=null;if(v.isNotBlank())loadRepos()};fun disconnectGitHub(){settings.setGitHubToken("");_repos.value=emptyList();_branches.value=emptyList();_scopePreview.value=null;_preflight.value=null;_message.value="GitHub disconnected"}
+    fun loadRepos(){if(_loading.value)return;viewModelScope.launch{_loading.value=true;_message.value=null;try{_repos.value=github.listRepos()}catch(e:Exception){_message.value=friendlyError(e,"GitHub repositories")}finally{_loading.value=false}}}
+    fun loadBranches(repoFullName:String){viewModelScope.launch{try{_branches.value=refs.branches(repoFullName)}catch(e:Exception){_branches.value=emptyList();_message.value=friendlyError(e,"Branch list")}}};fun clearBranches(){_branches.value=emptyList()}
+    fun loadHistory(){viewModelScope.launch{_history.value=withContext(Dispatchers.IO){historyDb.list()}}};fun deleteHistory(id:Long){viewModelScope.launch{withContext(Dispatchers.IO){historyDb.delete(id)};loadHistory()}}
+    fun scopeRules(repoFullName:String)=rulesStore.get(repoFullName);fun auditReviewerModels()=settings.auditReviewerModels().filter{it.isNotBlank()};fun auditChairman()=settings.auditChairman();fun refreshAuditAllocation(){_auditAllocationVersion.value++;_preflight.value=_scopePreview.value?.takeIf{it.unresolvedFiles==0}?.let(::buildPreflight);loadHistory()};fun auditAllocationReady():Boolean{val r=auditReviewerModels();return r.size>=2&&r.distinct().size==r.size&&auditChairman().isNotBlank()};fun setPrivacyConfirmed(value:Boolean){_privacyConfirmed.value=value}
+    fun prepareScope(repo:GitHubRepo,ref:String,customRules:String){if(_loading.value)return;if(!auditAllocationReady()){_message.value="Configure at least two distinct Reviewers and one Final Reviewer first.";return};rulesStore.set(repo.fullName,customRules);_privacyConfirmed.value=false;scopeJob=viewModelScope.launch{_loading.value=true;_scopePreview.value=null;_preflight.value=null;try{_message.value="Mapping tracked files and applying hard/user rules…";val deterministic=github.previewScope(repo,ref.ifBlank{repo.defaultBranch},customRules);_scopePreview.value=deterministic;scopeStore.save(deterministic);val prepared=if(deterministic.unresolvedFiles==0)deterministic.copy(validationSummary="Automatic scope preparation complete: deterministic rules resolved every tracked file.")else{_message.value="AI is classifying ${deterministic.unresolvedFiles} ambiguous files by family…";scopeValidator.validate(deterministic){_message.value=it}};_scopePreview.value=prepared;scopeStore.save(prepared);_message.value=prepared.validationSummary;if(prepared.unresolvedFiles==0)_preflight.value=buildPreflight(prepared)}catch(e:CancellationException){_message.value="Automatic scope preparation cancelled"}catch(e:Exception){_message.value=friendlyError(e,"Automatic scope preparation")}finally{_loading.value=false;scopeJob=null}}}
+    fun cancelScopePreparation(){scopeJob?.cancel()};fun retryAutomaticScope(){val current=_scopePreview.value?:return;if(_loading.value||current.unresolvedFiles==0)return;scopeJob=viewModelScope.launch{_loading.value=true;try{_message.value="Retrying ${current.unresolvedFiles} unresolved files…";val prepared=scopeValidator.validate(current){_message.value=it};_scopePreview.value=prepared;scopeStore.save(prepared);_message.value=prepared.validationSummary;if(prepared.unresolvedFiles==0)_preflight.value=buildPreflight(prepared)}catch(e:CancellationException){_message.value="Automatic scope retry cancelled"}catch(e:Exception){_message.value=friendlyError(e,"Automatic scope retry")}finally{_loading.value=false;scopeJob=null}}}
+    fun previewScope(repo:GitHubRepo,ref:String,customRules:String)=prepareScope(repo,ref,customRules);fun validateScope()=retryAutomaticScope()
+    fun overrideScope(path:String,status:AuditScopeStatus){val current=_scopePreview.value?:return;val updated=current.copy(manifest=current.manifest.map{if(it.path==path)it.copy(status=status,reason="manual advanced scope override",confidence=100,decisionSource="user")else it},validationSummary="Advanced override applied.");_scopePreview.value=updated;scopeStore.save(updated);_preflight.value=if(updated.unresolvedFiles==0)buildPreflight(updated)else null;_privacyConfirmed.value=false};fun clearScopePreview(){_scopePreview.value=null;_preflight.value=null;_privacyConfirmed.value=false}
+    fun start(repo:GitHubRepo,ref:String){if(run.value.stage in listOf(RepoAuditStage.SNAPSHOT,RepoAuditStage.INDEPENDENT,RepoAuditStage.PEER_REVIEW,RepoAuditStage.VERIFY,RepoAuditStage.CHAIRMAN))return;val reviewers=auditReviewerModels();val finalReviewer=auditChairman().trim();if(reviewers.size<2||reviewers.distinct().size!=reviewers.size||finalReviewer.isBlank()){_message.value="Audit blocked: assign at least two distinct Reviewers and one Final Reviewer.";return};val p=_scopePreview.value;if(p==null||p.repoFullName!=repo.fullName||p.ref!=ref.ifBlank{repo.defaultBranch}){_message.value="Prepare the automatic audit scope first.";return};if(p.unresolvedFiles>0){_message.value="Audit blocked: ${p.unresolvedFiles} scope entries remain unresolved.";return};if(p.requiredFiles<=0){_message.value="Validated scope contains no required files.";return};if(!_privacyConfirmed.value){_message.value="Review and accept the external-model privacy preflight before starting.";return};scopeStore.save(p);ContextCompat.startForegroundService(app,Intent(app,RepoAuditService::class.java).apply{action=RepoAuditService.ACTION_START;putExtra(RepoAuditService.EXTRA_REPO,repo.fullName);putExtra(RepoAuditService.EXTRA_REF,p.commitSha)});_message.value="Audit pinned to ${p.commitSha.take(12)} · scope ${p.manifestHash.take(12)} · ${reviewers.size} Reviewers · Final Reviewer $finalReviewer"}
+    fun cancel(){app.startService(Intent(app,RepoAuditService::class.java).apply{action=RepoAuditService.ACTION_CANCEL})};fun clear(){RepoAuditRuntime.clear(app)};fun setExportTree(uri:Uri){settings.setExportTreeUri(uri.toString());_message.value="Export workspace saved"};fun exportTree():Uri?=settings.exportTreeUri()?.let(Uri::parse);fun exportCurrent(){val uri=exportTree();if(uri==null){_message.value="Choose an export workspace folder first";return};val current=run.value;if(current.repoFullName.isBlank()){_message.value="No repository audit is available to export";return};viewModelScope.launch{_loading.value=true;try{_message.value="Exported repository audit to "+withContext(Dispatchers.IO){ExportManager.exportRepoAudit(app,uri,current)}}catch(e:Exception){_message.value=friendlyError(e,"Export")}finally{_loading.value=false}}};fun clearMessage(){_message.value=null}
+    private fun buildPreflight(p:AuditScopePreview):AuditPreflight{val reviewers=(auditReviewerModels()+auditChairman()).distinct().size;val chars=p.manifest.filter{it.status==AuditScopeStatus.REQUIRED}.sumOf{it.size}.coerceAtLeast(1L);val batches=ceil(chars/30000.0).toInt().coerceAtLeast(1);val requests=reviewers*batches+reviewers*2+auditReviewerModels().size+6;val minutes=(requests*0.12).coerceAtLeast(1.0);val providers=(auditReviewerModels()+auditChairman()).distinct().map{ModelSource.fromKey(it).displayName}.distinct();return AuditPreflight(p.requiredFiles,p.excludedFiles,reviewers,batches,requests,chars*reviewers,requests*1900L,minutes.toInt().coerceAtLeast(1),(minutes*2.5).toInt().coerceAtLeast(3),p.manifestHash,providers)}
+    private fun friendlyError(e:Exception,context:String):String{val raw=(e.message?:e.toString()).trim();val lower=raw.lowercase();return when{"unable to resolve host" in lower||"no address associated with hostname" in lower->"$context paused: no network/DNS connection. Saved progress is preserved. Check connectivity and retry.";"401" in lower||"unauthorized" in lower||"authentication" in lower->"$context failed: a provider credential was rejected. Check credentials and retry.";"429" in lower||"rate limit" in lower->"$context paused: provider rate limit reached. Wait or use another configured provider.";"credit" in lower||"402" in lower->"$context paused: provider credits/billing are insufficient.";else->"$context failed: ${raw.take(500)}"}}
 }
