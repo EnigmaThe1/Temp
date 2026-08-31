@@ -1,0 +1,72 @@
+package com.llmcouncil.mobile
+
+import android.app.*
+import android.content.Context
+import android.content.Intent
+import android.os.IBinder
+import androidx.core.app.NotificationCompat
+import com.llmcouncil.mobile.data.*
+import com.llmcouncil.mobile.domain.RepoAuditEngine
+import com.llmcouncil.mobile.model.GitHubRepo
+import com.llmcouncil.mobile.model.RepoAuditRun
+import com.llmcouncil.mobile.model.RepoAuditStage
+import kotlinx.coroutines.*
+
+class RepoAuditService : Service() {
+    companion object {
+        const val ACTION_START = "com.llmcouncil.mobile.action.START_REPO_AUDIT"
+        const val ACTION_CANCEL = "com.llmcouncil.mobile.action.CANCEL_REPO_AUDIT"
+        const val EXTRA_REPO = "repo"
+        const val EXTRA_REF = "ref"
+        private const val CHANNEL = "repo_audit_runs"
+        private const val NOTIFICATION_ID = 4405
+    }
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var active: Job? = null
+
+    override fun onCreate(){super.onCreate();RepoAuditRuntime.initialise(this);createChannel()}
+    override fun onStartCommand(intent:Intent?,flags:Int,startId:Int):Int {
+        when(intent?.action){
+            ACTION_CANCEL->{active?.cancel();val cancelled=RepoAuditRuntime.run.value.copy(stage=RepoAuditStage.CANCELLED,finishedAt=System.currentTimeMillis());RepoAuditRuntime.update(this,cancelled);stopForeground(STOP_FOREGROUND_REMOVE);stopSelf()}
+            ACTION_START->{val repo=intent.getStringExtra(EXTRA_REPO).orEmpty().trim();val ref=intent.getStringExtra(EXTRA_REF).orEmpty().trim().ifBlank{"main"};if(repo.isNotBlank()&&active?.isActive!=true)startAudit(repo,ref)}
+        }
+        return START_REDELIVER_INTENT
+    }
+
+    private fun startAudit(repoFullName:String,ref:String){
+        startForeground(NOTIFICATION_ID,notification("Loading validated scope manifest…",true))
+        active=scope.launch{
+            val settings=SecureSettings(this@RepoAuditService)
+            val github=GitHubClient(settings)
+            val ai=OpenRouterClient(settings)
+            val engine=RepoAuditEngine(ai,settings,ModelHealthDb(this@RepoAuditService))
+            val approved=ScopeManifestStore(this@RepoAuditService).load(ref)
+                ?: throw IllegalStateException("Validated scope manifest for commit ${ref.take(12)} is missing. Re-analyse scope before auditing.")
+            if(approved.repoFullName!=repoFullName)throw IllegalStateException("Validated scope manifest belongs to another repository")
+            if(approved.unresolvedFiles>0)throw IllegalStateException("Validated scope still has ${approved.unresolvedFiles} unresolved files")
+            val checkpoint=RepoAuditRuntime.run.value.takeIf{it.repoFullName==repoFullName&&it.ref==ref&&it.stage!=RepoAuditStage.COMPLETE}
+            try{
+                var state=RepoAuditRun(repoFullName=repoFullName,ref=ref,stage=RepoAuditStage.SNAPSHOT,startedAt=checkpoint?.startedAt?:System.currentTimeMillis())
+                RepoAuditRuntime.update(this@RepoAuditService,state)
+                val repo=GitHubRepo(repoFullName,ref,false,"")
+                val snapshot=github.snapshot(repo,ref,approved){current,total,path->val pct=if(total<=0)0 else current*100/total;notifyProgress("Snapshot $current/$total · ${path.takeLast(38)}",pct)}
+                val resume=checkpoint?.takeIf{it.commitSha==snapshot.commitSha}
+                state=(resume?:state).copy(repoFullName=repoFullName,ref=ref,commitSha=snapshot.commitSha,stage=RepoAuditStage.INDEPENDENT,requiredFiles=snapshot.requiredFiles.size,excludedFiles=snapshot.excluded.size,excludedManifest=snapshot.excluded,finishedAt=null)
+                RepoAuditRuntime.update(this@RepoAuditService,state)
+                val result=engine.run(snapshot,resume){update->RepoAuditRuntime.update(this@RepoAuditService,update);notifyAudit(update)}
+                RepoAuditRuntime.update(this@RepoAuditService,result)
+                val finalText=when(result.stage){RepoAuditStage.COMPLETE->"Repository audit finished · tap to view";RepoAuditStage.CANCELLED->"Repository audit cancelled";else->"Repository audit stopped · tap for diagnostics"}
+                (getSystemService(Context.NOTIFICATION_SERVICE)as NotificationManager).notify(NOTIFICATION_ID,notification(finalText,false,false))
+            }catch(e:CancellationException){RepoAuditRuntime.update(this@RepoAuditService,RepoAuditRuntime.run.value.copy(stage=RepoAuditStage.CANCELLED,finishedAt=System.currentTimeMillis()))}
+            catch(e:Exception){val current=RepoAuditRuntime.run.value;val failed=current.copy(stage=RepoAuditStage.ERROR,errors=current.errors+("Repository audit" to(e.message?:e.toString())),finishedAt=System.currentTimeMillis());RepoAuditRuntime.update(this@RepoAuditService,failed);(getSystemService(Context.NOTIFICATION_SERVICE)as NotificationManager).notify(NOTIFICATION_ID,notification("Repository audit failed · tap for diagnostics",false,false))}
+            finally{stopForeground(STOP_FOREGROUND_DETACH);stopSelf()}
+        }
+    }
+
+    private fun notifyAudit(run:RepoAuditRun){val text=when(run.stage){RepoAuditStage.SNAPSHOT->"Building validated repository snapshot";RepoAuditStage.INDEPENDENT->{val complete=run.modelAudits.count{it.complete};val partial=run.modelAudits.lastOrNull();val coverage=partial?.let{if(it.requiredCount==0)0 else it.coveredCount*100/it.requiredCount}?:0;"Independent audits · $complete complete · current coverage $coverage%"};RepoAuditStage.PEER_REVIEW->"Peer-reviewing exhaustive audits";RepoAuditStage.VERIFY->"Adversarial finding verification";RepoAuditStage.CHAIRMAN->"Chairman final synthesis";RepoAuditStage.COMPLETE->"Repository audit finished";RepoAuditStage.ERROR->"Repository audit stopped";RepoAuditStage.CANCELLED->"Repository audit cancelled";else->"Repository audit running"};(getSystemService(Context.NOTIFICATION_SERVICE)as NotificationManager).notify(NOTIFICATION_ID,notification(text,run.stage !in listOf(RepoAuditStage.COMPLETE,RepoAuditStage.ERROR,RepoAuditStage.CANCELLED)))}
+    private fun notifyProgress(text:String,pct:Int){(getSystemService(Context.NOTIFICATION_SERVICE)as NotificationManager).notify(NOTIFICATION_ID,notification(text,false,true,pct))}
+    private fun notification(text:String,indeterminate:Boolean,ongoing:Boolean=true,progress:Int?=null):Notification{val pending=PendingIntent.getActivity(this,4405,Intent(this,RepoAuditActivity::class.java),PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE);val cancel=PendingIntent.getService(this,4406,Intent(this,RepoAuditService::class.java).apply{action=ACTION_CANCEL},PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE);val b=NotificationCompat.Builder(this,CHANNEL).setSmallIcon(android.R.drawable.stat_notify_sync).setContentTitle("OmniCouncil · Repository Audit").setContentText(text).setContentIntent(pending).setOnlyAlertOnce(true).setOngoing(ongoing).setPriority(NotificationCompat.PRIORITY_LOW);if(ongoing)b.addAction(android.R.drawable.ic_menu_close_clear_cancel,"Cancel",cancel);when{progress!=null->b.setProgress(100,progress.coerceIn(0,100),false);indeterminate->b.setProgress(0,0,true);else->b.setProgress(0,0,false)};return b.build()}
+    private fun createChannel(){(getSystemService(Context.NOTIFICATION_SERVICE)as NotificationManager).createNotificationChannel(NotificationChannel(CHANNEL,"Repository audits",NotificationManager.IMPORTANCE_LOW).apply{description="Progress and completion for exhaustive OmniCouncil repository audits"})}
+    override fun onDestroy(){super.onDestroy();if(active?.isCompleted==true)scope.cancel()}
+    override fun onBind(intent:Intent?):IBinder?=null
+}

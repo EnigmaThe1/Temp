@@ -1,10 +1,7 @@
 package com.llmcouncil.mobile.data
 
 import android.util.Base64
-import com.llmcouncil.mobile.model.AuditScopePreview
-import com.llmcouncil.mobile.model.GitHubRepo
-import com.llmcouncil.mobile.model.RepoFile
-import com.llmcouncil.mobile.model.RepoSnapshot
+import com.llmcouncil.mobile.model.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -26,32 +23,27 @@ class GitHubClient(private val settings: SecureSettings) {
         .followSslRedirects(true)
         .build()
 
-    private data class TreeMeta(val path: String, val sha: String, val size: Long)
-    private data class PendingTree(val prefix: String, val sha: String)
-    private data class ScopeDecision(val required: Boolean, val category: String, val reason: String? = null)
-    private data class ScopedManifest(
-        val required: LinkedHashMap<String, Pair<TreeMeta, ScopeDecision>>,
-        val excluded: List<RepoFile>,
-        val totalTracked: Int,
-        val requiredByCategory: Map<String, Int>,
-        val excludedByReason: Map<String, Int>
-    )
+    private data class TreeMeta(val path:String,val sha:String,val size:Long)
+    private data class PendingTree(val prefix:String,val sha:String)
+    private data class ScopeDecision(val status:AuditScopeStatus,val category:String,val reason:String,val confidence:Int)
 
-    private fun auth(request: Request.Builder): Request.Builder {
+    private fun auth(builder: Request.Builder): Request.Builder {
         val token = settings.getGitHubToken()
-        if (token.isNotBlank()) request.header("Authorization", "Bearer $token")
-        return request.header("Accept", "application/vnd.github+json").header("X-GitHub-Api-Version", "2022-11-28").header("User-Agent", "OmniCouncil-Android")
+        if (token.isNotBlank()) builder.header("Authorization", "Bearer $token")
+        return builder.header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("User-Agent", "OmniCouncil-Android")
     }
 
     suspend fun listRepos(): List<GitHubRepo> = withContext(Dispatchers.IO) {
         require(settings.getGitHubToken().isNotBlank()) { "GitHub token is not configured" }
         val out = mutableListOf<GitHubRepo>()
         for (page in 1..20) {
-            val request = auth(Request.Builder().url("https://api.github.com/user/repos?per_page=100&page=$page&sort=updated&affiliation=owner,collaborator,organization_member")).build()
-            val data = JSONArray(executeText(request))
+            val req = auth(Request.Builder().url("https://api.github.com/user/repos?per_page=100&page=$page&sort=updated&affiliation=owner,collaborator,organization_member")).build()
+            val data = JSONArray(executeText(req))
             for (i in 0 until data.length()) {
                 val o = data.getJSONObject(i)
-                out += GitHubRepo(o.getString("full_name"), o.optString("default_branch", "main"), o.optBoolean("private", false), o.optString("updated_at", ""), o.optString("description", ""))
+                out += GitHubRepo(o.getString("full_name"), o.optString("default_branch","main"), o.optBoolean("private",false), o.optString("updated_at",""), o.optString("description",""))
             }
             if (data.length() < 100) break
         }
@@ -61,40 +53,61 @@ class GitHubClient(private val settings: SecureSettings) {
     suspend fun previewScope(repo: GitHubRepo, ref: String = repo.defaultBranch): AuditScopePreview = withContext(Dispatchers.IO) {
         require(settings.getGitHubToken().isNotBlank()) { "GitHub token is not configured" }
         val safeRepo = repo.fullName.split('/').joinToString("/") { encode(it) }
-        val resolved = resolveCommitAndTree(safeRepo, ref)
-        val manifest = loadCompleteTreeManifest(safeRepo, resolved.second)
-        val scoped = classifyManifest(safeRepo, manifest)
-        AuditScopePreview(repo.fullName, ref, resolved.first, scoped.totalTracked, scoped.required.size, scoped.excluded.size, scoped.requiredByCategory, scoped.excludedByReason)
+        val (commitSha, treeSha) = resolveCommitAndTree(safeRepo, ref)
+        val manifest = loadCompleteTreeManifest(safeRepo, treeSha)
+        val gitIgnore = manifest.firstOrNull { it.path == ".gitignore" }?.let { loadBlobText(safeRepo, it.sha) }.orEmpty()
+        val matcher = GitIgnoreMatcher(gitIgnore)
+        val entries = manifest.map { item ->
+            val d = classifyScope(item.path, item.size, matcher)
+            AuditScopeEntry(item.path,item.sha,item.size,d.category,d.status,d.reason,d.confidence,"deterministic")
+        }
+        AuditScopePreview(repo.fullName, ref, commitSha, manifest.size, entries)
     }
 
-    suspend fun snapshot(repo: GitHubRepo, ref: String = repo.defaultBranch, onProgress: (Int, Int, String) -> Unit = { _, _, _ -> }): RepoSnapshot = withContext(Dispatchers.IO) {
+    suspend fun snapshot(
+        repo: GitHubRepo,
+        ref: String = repo.defaultBranch,
+        approvedManifest: AuditScopePreview,
+        onProgress: (Int,Int,String)->Unit = { _,_,_-> }
+    ): RepoSnapshot = withContext(Dispatchers.IO) {
         require(settings.getGitHubToken().isNotBlank()) { "GitHub token is not configured" }
+        require(approvedManifest.unresolvedFiles == 0) { "Audit scope still has ${approvedManifest.unresolvedFiles} unresolved files" }
         val safeRepo = repo.fullName.split('/').joinToString("/") { encode(it) }
-        val resolved = resolveCommitAndTree(safeRepo, ref)
-        val commitSha = resolved.first
-        val manifest = loadCompleteTreeManifest(safeRepo, resolved.second)
-        val scoped = classifyManifest(safeRepo, manifest)
-        val required = LinkedHashMap(scoped.required)
-        val excluded = scoped.excluded.toMutableList()
-        val found = linkedMapOf<String, RepoFile>()
-        val archiveRequest = auth(Request.Builder().url("https://api.github.com/repos/$safeRepo/zipball/$commitSha")).build()
-        http.newCall(archiveRequest).execute().use { response ->
-            if (!response.isSuccessful) throw githubError(response.code, response.body?.string().orEmpty())
+        val (commitSha, treeSha) = resolveCommitAndTree(safeRepo, ref)
+        require(commitSha == approvedManifest.commitSha) { "Repository moved since scope validation. Re-analyse scope before auditing." }
+        require(repo.fullName == approvedManifest.repoFullName) { "Validated scope belongs to a different repository" }
+
+        val current = loadCompleteTreeManifest(safeRepo, treeSha).associateBy { it.path }
+        val approvedByPath = approvedManifest.manifest.associateBy { it.path }
+        if (current.keys != approvedByPath.keys) throw IllegalStateException("Tracked-file manifest changed after validation. Re-analyse scope.")
+        for ((path, meta) in current) {
+            val approved = approvedByPath.getValue(path)
+            if (approved.sha != meta.sha) throw IllegalStateException("File $path changed after scope validation. Re-analyse scope.")
+        }
+
+        val required = approvedManifest.manifest.filter { it.status == AuditScopeStatus.REQUIRED }.associateBy { it.path }.toMutableMap()
+        val excluded = approvedManifest.manifest.filter { it.status == AuditScopeStatus.EXCLUDED }.map {
+            RepoFile(it.path,it.sha,it.size,"",it.category,true,it.reason)
+        }.toMutableList()
+        val found = linkedMapOf<String,RepoFile>()
+
+        val archive = auth(Request.Builder().url("https://api.github.com/repos/$safeRepo/zipball/$commitSha")).build()
+        http.newCall(archive).execute().use { response ->
+            if (!response.isSuccessful) throw githubError(response.code,response.body?.string().orEmpty())
             val body = response.body ?: throw IllegalStateException("GitHub returned an empty repository archive")
             ZipInputStream(body.byteStream().buffered()).use { zip ->
                 var entry = zip.nextEntry
                 while (entry != null) {
                     if (!entry.isDirectory) {
-                        val path = entry.name.substringAfter('/', entry.name)
-                        val scopedMeta = required[path]
-                        if (scopedMeta != null) {
-                            val (meta, decision) = scopedMeta
+                        val path = entry.name.substringAfter('/',entry.name)
+                        val scope = required[path]
+                        if (scope != null) {
                             onProgress(found.size + 1, required.size, path)
                             val bytes = zip.readBytes()
                             when {
-                                bytes.size > 1_000_000 -> { excluded += RepoFile(path, meta.sha, meta.size, "", decision.category, true, "archive entry exceeds 1 MB audit ingestion limit"); required.remove(path) }
-                                bytes.any { it.toInt() == 0 } -> { excluded += RepoFile(path, meta.sha, meta.size, "", decision.category, true, "binary content detected in archive"); required.remove(path) }
-                                else -> found[path] = RepoFile(path, meta.sha, meta.size, String(bytes, StandardCharsets.UTF_8), decision.category)
+                                bytes.size > 1_000_000 -> throw IllegalStateException("Validated required file $path exceeds ingestion limit at snapshot time")
+                                bytes.any { it.toInt() == 0 } -> throw IllegalStateException("Validated required file $path is binary at snapshot time")
+                                else -> found[path] = RepoFile(path,scope.sha,scope.size,String(bytes,StandardCharsets.UTF_8),scope.category)
                             }
                         }
                     }
@@ -103,63 +116,136 @@ class GitHubClient(private val settings: SecureSettings) {
             }
         }
         val missing = required.keys - found.keys
-        if (missing.isNotEmpty()) throw IllegalStateException("Pinned repository archive did not contain ${missing.size} required manifest file(s), including ${missing.take(8).joinToString()}. Exhaustive audit aborted rather than silently skipping them.")
-        RepoSnapshot(repo, ref, commitSha, required.keys.map { found.getValue(it) }, excluded.distinctBy { it.path }.sortedBy { it.path })
+        if (missing.isNotEmpty()) throw IllegalStateException("Pinned archive omitted ${missing.size} validated required files, including ${missing.take(8).joinToString()}")
+        RepoSnapshot(repo,ref,commitSha,required.keys.map { found.getValue(it) },excluded.sortedBy { it.path })
     }
 
-    private fun resolveCommitAndTree(safeRepo: String, ref: String): Pair<String, String> {
-        val root = JSONObject(executeText(auth(Request.Builder().url("https://api.github.com/repos/$safeRepo/commits/${encode(ref)}")).build()))
-        val commitSha = root.getString("sha")
-        val treeSha = root.optJSONObject("commit")?.optJSONObject("tree")?.optString("sha").orEmpty()
-        if (treeSha.isBlank()) throw IllegalStateException("GitHub commit response did not include the root tree SHA")
-        return commitSha to treeSha
-    }
+    private fun classifyScope(path:String,size:Long,ignore:GitIgnoreMatcher):ScopeDecision {
+        val lower = path.lowercase().replace('\\','/')
+        val segments = lower.split('/')
+        val name = segments.lastOrNull().orEmpty()
+        val tail = name.substringAfterLast('.',"")
+        val ext = if (tail == name) "" else ".$tail"
+        fun excluded(category:String,reason:String,confidence:Int=99)=ScopeDecision(AuditScopeStatus.EXCLUDED,category,reason,confidence)
+        fun required(category:String,reason:String,confidence:Int=98)=ScopeDecision(AuditScopeStatus.REQUIRED,category,reason,confidence)
+        fun review(category:String,reason:String,confidence:Int=50)=ScopeDecision(AuditScopeStatus.NEEDS_REVIEW,category,reason,confidence)
 
-    private fun classifyManifest(safeRepo: String, manifest: List<TreeMeta>): ScopedManifest {
-        val gitIgnore = manifest.firstOrNull { it.path == ".gitignore" }?.let { loadBlobText(safeRepo, it.sha) }.orEmpty()
-        val matcher = GitIgnoreMatcher(gitIgnore)
-        val required = linkedMapOf<String, Pair<TreeMeta, ScopeDecision>>()
-        val excluded = mutableListOf<RepoFile>()
-        val req = linkedMapOf<String, Int>(); val exc = linkedMapOf<String, Int>()
-        for (item in manifest) {
-            val d = classifyScope(item.path, item.size, matcher)
-            if (d.required) { required[item.path] = item to d; req[d.category] = (req[d.category] ?: 0) + 1 }
-            else { val reason = d.reason ?: "excluded by canonical audit scope"; excluded += RepoFile(item.path,item.sha,item.size,"",d.category,true,reason); exc[reason]=(exc[reason]?:0)+1 }
+        if (size > 1_000_000) return excluded("excluded-large","file exceeds 1 MB audit ingestion limit")
+        val binary = setOf(".png",".jpg",".jpeg",".gif",".webp",".ico",".pdf",".zip",".gz",".7z",".jar",".aar",".apk",".so",".dll",".exe",".bin",".mp3",".wav",".flac",".mp4",".mov",".avi",".woff",".woff2",".ttf",".otf",".class",".pyc",".pyo",".o",".a",".dylib",".map",".sqlite",".sqlite3",".db",".db-shm",".db-wal")
+        if (ext in binary) return excluded("excluded-binary","binary/generated/non-source file type")
+        if (lower.endsWith(".min.js") || lower.endsWith(".min.css")) return excluded("excluded-generated","generated/minified asset")
+
+        val generatedDirs = setOf(".git","node_modules","vendor","dist","dist-ssr","build",".gradle",".idea","coverage","target","pods",".venv","venv","env","__pycache__",".pytest_cache",".mypy_cache",".ruff_cache",".tox",".next",".nuxt",".svelte-kit",".parcel-cache",".turbo",".cache",".uv-cache","site-packages","bin","obj","generated","generated-src","playwright-report","allure-results","test-results")
+        if (segments.any { it in generatedDirs }) return excluded("excluded-generated","generated/vendor/cache directory")
+        if (lower.startsWith(".dev/") || lower.startsWith("investigation/") || lower.contains("/generated-evidence/") || lower.contains("/audit-evidence/") || lower.contains("/historical-evidence/") || lower.contains("/forensics/") || lower.contains("/forensic-output/")) return excluded("excluded-historical-evidence","historical/diagnostic evidence workspace")
+        if (ignore.isIgnored(lower)) return excluded("excluded-repository-ignored","matches repository .gitignore")
+
+        val sourceExt = setOf(".kt",".kts",".java",".py",".pyi",".js",".jsx",".mjs",".cjs",".ts",".tsx",".go",".rs",".c",".h",".hpp",".cpp",".cc",".cs",".rb",".php",".swift",".dart",".scala",".sh",".bash",".zsh",".fish",".ps1",".sql",".proto",".graphql",".gql",".vue",".svelte",".html",".htm",".css",".scss",".sass",".less")
+        val testPath = segments.any { it in setOf("test","tests","spec","specs","e2e","integration") }
+        val suspiciousSourceFamily = segments.any { it in setOf("archive","archives","legacy","examples","example","samples","sample","fixtures","fixture","benchmarks","benchmark") }
+        if (ext in sourceExt) {
+            val category = if (testPath) "tests" else "source"
+            return if (suspiciousSourceFamily) review(category,"source-like file is under an archive/example/fixture/legacy family")
+            else required(category,"recognised ${if(testPath) "test" else "source"} file")
         }
-        return ScopedManifest(required, excluded, manifest.size, req, exc)
+
+        val canonicalNames = setOf("dockerfile","makefile","procfile","gemfile","rakefile","justfile","cmakelists.txt","requirements.txt","constraints.txt","pipfile","poetry.lock","package.json","package-lock.json","pnpm-lock.yaml","yarn.lock","gradlew","gradlew.bat",".gitignore",".gitattributes",".editorconfig",".dockerignore",".npmrc")
+        if (name in canonicalNames || name.endsWith(".env.example") || name.endsWith(".env.sample")) return required("configuration","canonical build/dependency/repository configuration")
+        if (lower.startsWith(".github/") && ext in setOf(".yml",".yaml",".md")) return required("configuration","GitHub CI/workflow/governance configuration")
+
+        val configExt = setOf(".yml",".yaml",".toml",".ini",".cfg",".conf",".properties",".xml",".json",".jsonc",".lock")
+        if (ext in configExt) {
+            if (segments.any { it in setOf("fixtures","fixture","samples","sample-data","datasets","dataset","snapshots") }) return excluded("excluded-test-data","fixture/sample/dataset artifact")
+            if (segments.size == 1) return required("configuration","root project configuration",92)
+            return review("configuration","structured text may be configuration, generated metadata, report data or runtime state")
+        }
+
+        val docExt = setOf(".md",".mdx",".rst",".adoc",".asciidoc")
+        if (ext in docExt) {
+            if (segments.size == 1 && (name.startsWith("readme") || name.startsWith("license") || name.startsWith("changelog") || name.startsWith("contributing") || name.startsWith("security"))) return required("documentation","canonical root project documentation")
+            val canonicalDocFamily = segments.any { it in setOf("architecture","architectures","adr","adrs","requirements","spec","specs","api","security","deployment","deploy","operations","runbooks","runbook") }
+            return if (canonicalDocFamily) required("documentation","canonical architecture/requirements/API/security/operations documentation",90)
+            else review("documentation","documentation-like file requires current-vs-historical scope validation")
+        }
+
+        val dataExt = setOf(".csv",".tsv",".jsonl",".ndjson",".parquet",".feather",".arrow",".pkl",".pickle",".npy",".npz")
+        if (ext in dataExt) return excluded("excluded-data","runtime/fixture/dataset file type")
+        if (ext == ".txt") return review("documentation","plain text may be canonical documentation or generated/report output")
+        return review("unclassified","file is not safely classifiable from deterministic repository metadata")
     }
 
-    private fun classifyScope(path: String, size: Long, ignoreMatcher: GitIgnoreMatcher): ScopeDecision {
-        val lower = path.lowercase().replace('\\','/'); val segments=lower.split('/'); val name=segments.lastOrNull().orEmpty(); val tail=name.substringAfterLast('.',""); val ext=if(tail==name) "" else ".$tail"
-        if(size>1_000_000)return ScopeDecision(false,"excluded-large","file exceeds 1 MB audit ingestion limit")
-        val binary=setOf(".png",".jpg",".jpeg",".gif",".webp",".ico",".pdf",".zip",".gz",".7z",".jar",".aar",".apk",".so",".dll",".exe",".bin",".mp3",".wav",".flac",".mp4",".mov",".avi",".woff",".woff2",".ttf",".otf",".class",".pyc",".pyo",".o",".a",".dylib",".map",".sqlite",".sqlite3",".db",".db-shm",".db-wal")
-        if(ext in binary)return ScopeDecision(false,"excluded-binary","binary/generated/non-source file type")
-        if(lower.endsWith(".min.js")||lower.endsWith(".min.css"))return ScopeDecision(false,"excluded-generated","generated/minified asset")
-        val dirs=setOf(".git","node_modules","vendor","dist","dist-ssr","build",".gradle",".idea","coverage","target","pods",".venv","venv","env","__pycache__",".pytest_cache",".mypy_cache",".ruff_cache",".tox",".next",".nuxt",".svelte-kit",".parcel-cache",".turbo",".cache",".uv-cache","site-packages","bin","obj","generated","generated-src","playwright-report","allure-results","test-results")
-        if(segments.any{it in dirs})return ScopeDecision(false,"excluded-generated","generated/vendor/cache directory")
-        if(lower.startsWith(".dev/")||lower.startsWith("investigation/")||lower.contains("/generated-evidence/")||lower.contains("/audit-evidence/")||lower.contains("/historical-evidence/")||lower.contains("/forensics/")||lower.contains("/forensic-output/"))return ScopeDecision(false,"excluded-historical-evidence","historical/diagnostic evidence workspace")
-        if(ignoreMatcher.isIgnored(lower))return ScopeDecision(false,"excluded-repository-ignored","matches repository .gitignore")
-        if(name in setOf(".ds_store","thumbs.db","desktop.ini"))return ScopeDecision(false,"excluded-generated","generated operating-system metadata")
-        val source=setOf(".kt",".kts",".java",".py",".pyi",".js",".jsx",".mjs",".cjs",".ts",".tsx",".go",".rs",".c",".h",".hpp",".cpp",".cc",".cs",".rb",".php",".swift",".dart",".scala",".sh",".bash",".zsh",".fish",".ps1",".sql",".proto",".graphql",".gql",".vue",".svelte",".html",".htm",".css",".scss",".sass",".less")
-        val testPath=segments.any{it in setOf("test","tests","spec","specs","e2e","integration")}; if(ext in source)return ScopeDecision(true,if(testPath)"tests" else "source")
-        val docs=setOf(".md",".mdx",".rst",".adoc",".asciidoc",".mdc"); if(ext in docs)return ScopeDecision(true,if(ext==".mdc")"configuration" else "documentation")
-        val configs=setOf(".yml",".yaml",".toml",".ini",".cfg",".conf",".properties",".xml",".json",".jsonc",".lock")
-        if(ext in configs){val dataLike=segments.any{it in setOf("fixtures","fixture","samples","sample-data","datasets","dataset","snapshots")};return if(dataLike)ScopeDecision(false,"excluded-test-data","fixture/sample/dataset artifact")else ScopeDecision(true,"configuration")}
-        val canonical=setOf("dockerfile","makefile","procfile","gemfile","rakefile","justfile","cmakelists.txt","requirements.txt","constraints.txt","pipfile","poetry.lock","package.json","package-lock.json","pnpm-lock.yaml","yarn.lock","gradlew","gradlew.bat",".gitignore",".gitattributes",".editorconfig",".dockerignore",".npmrc")
-        if(name in canonical||name.startsWith("readme")||name.startsWith("license")||name.startsWith("changelog"))return ScopeDecision(true,if(name.startsWith("readme")||name.startsWith("license")||name.startsWith("changelog"))"documentation" else "configuration")
-        if(name.endsWith(".env.example")||name.endsWith(".env.sample")||name.endsWith(".example"))return ScopeDecision(true,"configuration")
-        if(ext in setOf(".csv",".tsv",".jsonl",".ndjson",".parquet",".feather",".arrow",".pkl",".pickle",".npy",".npz"))return ScopeDecision(false,"excluded-data","runtime/fixture/dataset file type")
-        if(ext==".txt"){val canonicalDoc=segments.firstOrNull() in setOf("docs","doc")||name.startsWith("readme")||name.contains("requirements");return if(canonicalDoc)ScopeDecision(true,"documentation")else ScopeDecision(false,"excluded-text-artifact","unclassified text/report artifact")}
-        return ScopeDecision(false,"excluded-unclassified","not recognised as canonical source/test/config/documentation")
+    private fun resolveCommitAndTree(safeRepo:String,ref:String):Pair<String,String> {
+        val root = JSONObject(executeText(auth(Request.Builder().url("https://api.github.com/repos/$safeRepo/commits/${encode(ref)}")).build()))
+        val commit = root.getString("sha")
+        val tree = root.optJSONObject("commit")?.optJSONObject("tree")?.optString("sha").orEmpty()
+        if (tree.isBlank()) throw IllegalStateException("GitHub commit response did not include root tree SHA")
+        return commit to tree
     }
 
-    private fun loadBlobText(safeRepo:String,sha:String):String=runCatching{val root=JSONObject(executeText(auth(Request.Builder().url("https://api.github.com/repos/$safeRepo/git/blobs/$sha")).build()));if(root.optString("encoding")!="base64")"" else String(Base64.decode(root.optString("content"),Base64.DEFAULT),StandardCharsets.UTF_8)}.getOrDefault("")
+    private fun loadBlobText(safeRepo:String,sha:String):String = runCatching {
+        val root = JSONObject(executeText(auth(Request.Builder().url("https://api.github.com/repos/$safeRepo/git/blobs/$sha")).build()))
+        if (root.optString("encoding") != "base64") "" else String(Base64.decode(root.optString("content"),Base64.DEFAULT),StandardCharsets.UTF_8)
+    }.getOrDefault("")
 
-    private fun loadCompleteTreeManifest(safeRepo:String,rootTreeSha:String):List<TreeMeta>{val root=JSONObject(executeText(auth(Request.Builder().url("https://api.github.com/repos/$safeRepo/git/trees/$rootTreeSha?recursive=1")).build()));if(!root.optBoolean("truncated",false))return blobsFromTree(root.optJSONArray("tree")?:JSONArray(),"");val out=linkedMapOf<String,TreeMeta>();val q=ArrayDeque<PendingTree>();q.add(PendingTree("",rootTreeSha));val visited=mutableSetOf<String>();var count=0;while(q.isNotEmpty()){val p=q.removeFirst();if(!visited.add(p.sha))continue;if(++count>100_000)throw IllegalStateException("GitHub tree traversal exceeded 100,000 tree objects; exhaustive manifest aborted rather than risking incomplete coverage");val tr=JSONObject(executeText(auth(Request.Builder().url("https://api.github.com/repos/$safeRepo/git/trees/${p.sha}")).build()));if(tr.optBoolean("truncated",false))throw IllegalStateException("GitHub unexpectedly truncated a non-recursive tree object; exhaustive manifest cannot be proven");val a=tr.optJSONArray("tree")?:JSONArray();for(i in 0 until a.length()){val x=a.optJSONObject(i)?:continue;val n=x.optString("path");if(n.isBlank())continue;val path=if(p.prefix.isBlank())n else "${p.prefix}/$n";when(x.optString("type")){"blob"->out[path]=TreeMeta(path,x.optString("sha"),x.optLong("size",0));"tree"->{val s=x.optString("sha");if(s.isBlank())throw IllegalStateException("GitHub tree entry $path did not include a SHA");q.add(PendingTree(path,s))}}}};return out.values.sortedBy{it.path}}
-    private fun blobsFromTree(tree:JSONArray,prefix:String):List<TreeMeta>=buildList{for(i in 0 until tree.length()){val x=tree.optJSONObject(i)?:continue;if(x.optString("type")!="blob")continue;val raw=x.optString("path");val path=if(prefix.isBlank())raw else "$prefix/$raw";add(TreeMeta(path,x.optString("sha"),x.optLong("size",0)))}}
+    private fun loadCompleteTreeManifest(safeRepo:String,rootTreeSha:String):List<TreeMeta> {
+        val recursive = JSONObject(executeText(auth(Request.Builder().url("https://api.github.com/repos/$safeRepo/git/trees/$rootTreeSha?recursive=1")).build()))
+        if (!recursive.optBoolean("truncated",false)) return blobsFromTree(recursive.optJSONArray("tree") ?: JSONArray(),"")
+        val out = linkedMapOf<String,TreeMeta>()
+        val queue = ArrayDeque<PendingTree>(); queue.add(PendingTree("",rootTreeSha))
+        val visited = mutableSetOf<String>(); var count = 0
+        while (queue.isNotEmpty()) {
+            val pending = queue.removeFirst(); if (!visited.add(pending.sha)) continue
+            if (++count > 100_000) throw IllegalStateException("GitHub tree traversal exceeded 100,000 tree objects")
+            val root = JSONObject(executeText(auth(Request.Builder().url("https://api.github.com/repos/$safeRepo/git/trees/${pending.sha}")).build()))
+            if (root.optBoolean("truncated",false)) throw IllegalStateException("GitHub truncated a non-recursive tree object")
+            val tree = root.optJSONArray("tree") ?: JSONArray()
+            for (i in 0 until tree.length()) {
+                val item = tree.optJSONObject(i) ?: continue
+                val name = item.optString("path"); if (name.isBlank()) continue
+                val path = if (pending.prefix.isBlank()) name else "${pending.prefix}/$name"
+                when (item.optString("type")) {
+                    "blob" -> out[path] = TreeMeta(path,item.optString("sha"),item.optLong("size",0))
+                    "tree" -> queue.add(PendingTree(path,item.optString("sha")))
+                }
+            }
+        }
+        return out.values.sortedBy { it.path }
+    }
 
-    private class GitIgnoreMatcher(text:String){private data class Rule(val regex:Regex,val negated:Boolean);private val rules=text.lineSequence().mapNotNull(::compile).toList();fun isIgnored(path:String):Boolean{var ignored=false;for(r in rules)if(r.regex.matches(path))ignored=!r.negated;return ignored};private fun compile(raw:String):Rule?{var p=raw.trim();if(p.isBlank()||p.startsWith("#"))return null;val n=p.startsWith("!");if(n)p=p.drop(1);if(p.isBlank())return null;p=p.replace('\\','/').removePrefix("/").removeSuffix("/");val body=globToRegex(p);return Rule(Regex((if(p.contains('/'))"^" else "(^|.*/)")+body+"(/.*)?$"),n)};private fun globToRegex(g:String):String{val o=StringBuilder();var i=0;while(i<g.length){when(val c=g[i]){'*'->{if(i+1<g.length&&g[i+1]=='*'){o.append(".*");i++}else o.append("[^/]*")};'?'->o.append("[^/]");'.','(',')','+','|','^','$','@','%'->o.append('\\').append(c);else->o.append(c)};i++};return o.toString()}}
-    private fun executeText(request:Request):String{http.newCall(request).execute().use{r->val b=r.body?.string().orEmpty();if(!r.isSuccessful)throw githubError(r.code,b);return b}}
-    private fun githubError(code:Int,body:String):IllegalStateException{val m=runCatching{JSONObject(body).optString("message")}.getOrNull().orEmpty().ifBlank{body.take(500)};return IllegalStateException("GitHub HTTP $code: $m")}
-    private fun encode(value:String):String=URLEncoder.encode(value,"UTF-8").replace("+","%20")
+    private fun blobsFromTree(tree:JSONArray,prefix:String):List<TreeMeta> = buildList {
+        for (i in 0 until tree.length()) {
+            val item = tree.optJSONObject(i) ?: continue
+            if (item.optString("type") != "blob") continue
+            val raw = item.optString("path")
+            val path = if (prefix.isBlank()) raw else "$prefix/$raw"
+            add(TreeMeta(path,item.optString("sha"),item.optLong("size",0)))
+        }
+    }
+
+    private class GitIgnoreMatcher(text:String) {
+        private data class Rule(val regex:Regex,val negated:Boolean)
+        private val rules = text.lineSequence().mapNotNull(::compile).toList()
+        fun isIgnored(path:String):Boolean { var ignored=false; for(rule in rules) if(rule.regex.matches(path)) ignored=!rule.negated; return ignored }
+        private fun compile(raw:String):Rule? {
+            var p=raw.trim(); if(p.isBlank()||p.startsWith("#"))return null
+            val negated=p.startsWith("!"); if(negated)p=p.drop(1); if(p.isBlank())return null
+            p=p.replace('\\','/').removePrefix("/").removeSuffix("/")
+            val body=globToRegex(p); val prefix=if(p.contains('/'))"^" else "(^|.*/)"
+            return Rule(Regex(prefix+body+"(/.*)?$"),negated)
+        }
+        private fun globToRegex(glob:String):String {
+            val out=StringBuilder(); var i=0
+            while(i<glob.length){ when(val c=glob[i]){
+                '*'->{ if(i+1<glob.length&&glob[i+1]=='*'){out.append(".*");i++}else out.append("[^/]*") }
+                '?'->out.append("[^/]")
+                '.', '(', ')', '+', '|', '^', '$', '@', '%' -> out.append('\\').append(c)
+                else->out.append(c)
+            }; i++ }
+            return out.toString()
+        }
+    }
+
+    private fun executeText(request:Request):String { http.newCall(request).execute().use { r -> val body=r.body?.string().orEmpty(); if(!r.isSuccessful)throw githubError(r.code,body); return body } }
+    private fun githubError(code:Int,body:String):IllegalStateException { val msg=runCatching{JSONObject(body).optString("message")}.getOrNull().orEmpty().ifBlank{body.take(500)}; return IllegalStateException("GitHub HTTP $code: $msg") }
+    private fun encode(value:String)=URLEncoder.encode(value,"UTF-8").replace("+","%20")
 }

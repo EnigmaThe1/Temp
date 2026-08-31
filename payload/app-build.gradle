@@ -11,8 +11,8 @@ android {
         applicationId 'com.llmcouncil.mobile'
         minSdk 26
         targetSdk 35
-        versionCode 12
-        versionName '5.3'
+        versionCode 13
+        versionName '5.4'
     }
 
     buildFeatures {
@@ -28,9 +28,20 @@ android {
         resources.excludes += '/META-INF/{AL2.0,LGPL2.1}'
     }
 
-    buildTypes { release { minifyEnabled false } }
-    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
-    kotlinOptions { jvmTarget = '17'; freeCompilerArgs += ['-opt-in=androidx.compose.material3.ExperimentalMaterial3Api'] }
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = '17'
+        freeCompilerArgs += ['-opt-in=androidx.compose.material3.ExperimentalMaterial3Api']
+    }
 }
 
 dependencies {
