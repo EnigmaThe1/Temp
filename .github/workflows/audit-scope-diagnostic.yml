@@ -1,0 +1,94 @@
+name: Audit Scope Diagnostic
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/audit-scope-diagnostic.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scope:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Temp environment
+        uses: actions/checkout@v4
+      - name: Analyse target repository scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf target
+          git clone --depth 1 --branch main https://github.com/EnigmaThe1/omnisignal-terminal-v2.git target >/dev/null 2>&1
+          cd target
+          python - <<'PY'
+          from pathlib import Path
+          from collections import Counter, defaultdict
+          import subprocess
+
+          files = subprocess.check_output(['git','ls-files','-z']).decode().split('\0')
+          files = [f for f in files if f]
+          print(f'TOTAL_TRACKED_FILES={len(files)}')
+
+          top = Counter(f.split('/',1)[0] if '/' in f else '<root>' for f in files)
+          print('\n=== TOP_LEVEL_COUNTS ===')
+          for k,v in top.most_common():
+              print(f'{v:6d}  {k}')
+
+          ext = Counter((Path(f).suffix.lower() or '<no-ext>') for f in files)
+          print('\n=== EXTENSION_COUNTS_TOP40 ===')
+          for k,v in ext.most_common(40):
+              print(f'{v:6d}  {k}')
+
+          families = {
+              '.dev/evidence': lambda f: f.startswith('.dev/evidence/'),
+              'investigation': lambda f: f.startswith('investigation/'),
+              'backend/content': lambda f: f.startswith('backend/content/'),
+              'root-content': lambda f: f.startswith('content/'),
+              'docs': lambda f: f.startswith('docs/'),
+              'public': lambda f: f.startswith('public/'),
+              'backend/tests': lambda f: f.startswith('backend/tests/'),
+              'e2e': lambda f: f.startswith('e2e/'),
+              'backend/app': lambda f: f.startswith('backend/app/'),
+              'src': lambda f: f.startswith('src/'),
+          }
+          print('\n=== SELECTED_FAMILIES ===')
+          for name,pred in families.items():
+              print(f'{sum(1 for f in files if pred(f)):6d}  {name}')
+
+          suspicious_tokens = {
+              'evidence': ('/evidence/','evidence_','_evidence','/artifacts/','/artefacts/'),
+              'snapshots': ('snapshot','snapshots'),
+              'reports': ('/reports/','report_','_report.'),
+              'fixtures': ('fixture','fixtures'),
+              'generated': ('generated','autogen','codegen'),
+              'history-archive': ('archive','archives','history','historical'),
+              'logs-results': ('/logs/','test-results','test_results','results/'),
+              'coverage': ('coverage',),
+          }
+          print('\n=== SUSPICIOUS_NAME_FAMILIES ===')
+          lower = [(f,f.lower()) for f in files]
+          for name,tokens in suspicious_tokens.items():
+              matches = [f for f,l in lower if any(t in l for t in tokens)]
+              print(f'{len(matches):6d}  {name}')
+              for sample in matches[:8]:
+                  print(f'        sample: {sample}')
+
+          # Count second-level children for large roots.
+          for root in ['backend','.dev','docs','investigation','src','public','scripts','config','deploy','docker','e2e','content']:
+              c = Counter()
+              prefix = root + '/'
+              for f in files:
+                  if not f.startswith(prefix):
+                      continue
+                  rest = f[len(prefix):]
+                  child = rest.split('/',1)[0] if '/' in rest else '<files>'
+                  c[child] += 1
+              if c:
+                  print(f'\n=== {root} SECOND_LEVEL_COUNTS ===')
+                  for k,v in c.most_common():
+                      print(f'{v:6d}  {root}/{k}')
+          PY
