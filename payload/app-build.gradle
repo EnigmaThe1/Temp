@@ -11,8 +11,8 @@ android {
         applicationId 'com.llmcouncil.mobile'
         minSdk 26
         targetSdk 35
-        versionCode 16
-        versionName '5.7'
+        versionCode 17
+        versionName '6.0'
     }
 
     buildFeatures {
@@ -41,6 +41,7 @@ android {
     kotlinOptions {
         jvmTarget = '17'
         freeCompilerArgs += ['-opt-in=androidx.compose.material3.ExperimentalMaterial3Api']
+        freeCompilerArgs += ['-opt-in=androidx.compose.foundation.layout.ExperimentalLayoutApi']
     }
 }
 
