@@ -1,0 +1,30 @@
+package com.llmcouncil.mobile.data
+
+import android.content.Context
+import android.net.Uri
+import androidx.documentfile.provider.DocumentFile
+import com.llmcouncil.mobile.model.*
+import org.json.JSONArray
+import org.json.JSONObject
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+object ExportManager {
+    fun exportRepoAudit(context:Context,treeUri:Uri,run:RepoAuditRun):String {
+        val root=DocumentFile.fromTreeUri(context,treeUri)?:error("Selected folder is no longer accessible");val omni=dir(root,"OmniCouncil");val project=dir(omni,safe(run.repoFullName.replace('/','_')));val stamp=SimpleDateFormat("yyyy-MM-dd_HHmmss",Locale.UK).format(Date(run.startedAt));val name="${stamp}_Repository-Audit_${run.commitSha.take(8).ifBlank{"unknown"}}";val ws=dir(project,name);val metadata=dir(ws,"00_Audit-Metadata");val individual=dir(ws,"01_Individual-Reviews");val peer=dir(ws,"02_Peer-Reviews");val rankings=dir(ws,"03_Rankings");val final=dir(ws,"04_Final-Report");val evidence=dir(ws,"05_Evidence")
+        val summary=JSONObject().put("application","OmniCouncil").put("audit_type","Exhaustive Repository Audit").put("repository",run.repoFullName).put("ref",run.ref).put("commit_sha",run.commitSha).put("scope_manifest_hash",run.scopeManifestHash).put("stage",run.stage.name).put("required_files",run.requiredFiles).put("excluded_files",run.excludedFiles).put("final_reviewer_model",run.chairmanModel).put("started_at_epoch_ms",run.startedAt).put("finished_at_epoch_ms",run.finishedAt?:JSONObject.NULL).put("models",JSONArray(run.modelAudits.map{it.model})).put("errors",JSONObject(run.errors));write(context,metadata,"audit-summary.json","application/json",summary.toString(2))
+        run.modelAudits.forEachIndexed{i,a->write(context,individual,"%02d_%s.md".format(i+1,safe(a.model)),"text/markdown","# Independent Repository Audit\n\n- Model: `${a.model}`\n- Coverage: ${a.coveredCount}/${a.requiredCount}\n- Complete: ${a.complete}\n${a.error?.let{"- Error: $it\n"}?:""}\n## Report\n\n${a.report.ifBlank{"No final report produced."}}");write(context,evidence,"%02d_%s_batch-evidence.md".format(i+1,safe(a.model)),"text/markdown",buildString{append("# Batch Evidence — ${a.model}\n\n");a.batchReports.forEachIndexed{bi,r->append("## Batch ${bi+1}\n\n$r\n\n")}})}
+        run.peerReviews.forEachIndexed{i,r->write(context,peer,"%02d_peer-review.md".format(i+1),"text/markdown","# Anonymous Peer Review ${i+1}\n\n- Error: ${r.error?:"None"}\n\n${r.text}")}
+        write(context,rankings,"aggregate-ranking.csv","text/csv",buildString{append("rank,audit_label,average_rank,votes\n");run.aggregate.forEachIndexed{i,r->append("${i+1},${csv(r.model)},${r.averageRank},${r.votes}\n")}})
+        write(context,evidence,"file-coverage.csv","text/csv",buildString{append("model,path,covered,batch,error\n");run.modelAudits.flatMap{it.coverage}.forEach{c->append("${csv(c.model)},${csv(c.path)},${c.covered},${c.batchIndex},${csv(c.error?:"")}\n")}})
+        write(context,evidence,"excluded-files.csv","text/csv",buildString{append("path,sha,size,category,reason\n");run.excludedManifest.sortedBy{it.path}.forEach{f->append("${csv(f.path)},${csv(f.sha)},${f.size},${csv(f.category)},${csv(f.exclusionReason?:"excluded")}\n")}})
+        if(run.verificationMemo.isNotBlank())write(context,evidence,"adversarial-verification.md","text/markdown","# Adversarial Verification Memorandum\n\n${run.verificationMemo}")
+        write(context,final,"Final-OmniCouncil-Review.md","text/markdown","# Final OmniCouncil Repository Audit\n\nRepository: `${run.repoFullName}`  \nRef: `${run.ref}`  \nCommit: `${run.commitSha}`  \nScope fingerprint: `${run.scopeManifestHash}`  \nRequired files: ${run.requiredFiles}  \nExcluded files: ${run.excludedFiles}  \nFinal Reviewer: `${run.chairmanModel}`\n\n${run.finalReport.ifBlank{"No final report produced."}}")
+        return "OmniCouncil/${project.name}/$name"
+    }
+    fun exportCouncilRun(context:Context,treeUri:Uri,run:CouncilRun,projectName:String="Council-Runs"):String{val root=DocumentFile.fromTreeUri(context,treeUri)?:error("Selected folder is no longer accessible");val project=dir(dir(root,"OmniCouncil"),safe(projectName));val ws=dir(project,"${SimpleDateFormat("yyyy-MM-dd_HHmmss",Locale.UK).format(Date(run.startedAt))}_Council-Run");val individual=dir(ws,"01_Individual-Reviews");val peer=dir(ws,"02_Peer-Reviews");val final=dir(ws,"04_Final-Report");run.stage1.forEachIndexed{i,a->write(context,individual,"%02d_%s.md".format(i+1,safe(a.model)),"text/markdown","# ${a.model}\n\n${a.error?:a.text}")};run.stage2.forEachIndexed{i,r->write(context,peer,"%02d_peer-review.md".format(i+1),"text/markdown","# Anonymous Peer Review ${i+1}\n\n${r.error?:r.text}")};run.chairman?.let{write(context,final,"Final-OmniCouncil-Answer.md","text/markdown","# Final OmniCouncil Answer\n\nChairman: `${it.model}`\n\n${it.error?:it.text}")};return "OmniCouncil/${project.name}/${ws.name}"}
+    private fun dir(parent:DocumentFile,name:String):DocumentFile=parent.findFile(name)?.takeIf{it.isDirectory}?:parent.createDirectory(name)?:error("Unable to create folder $name")
+    private fun write(context:Context,parent:DocumentFile,name:String,mime:String,content:String){parent.findFile(name)?.delete();val file=parent.createFile(mime,name)?:error("Unable to create $name");context.contentResolver.openOutputStream(file.uri,"wt")?.bufferedWriter(Charsets.UTF_8)?.use{it.write(content)}?:error("Unable to write $name")}
+    private fun csv(value:String)="\"${value.replace("\"","\"\"")}\"";private fun safe(value:String)=value.replace(Regex("[^A-Za-z0-9._-]+"),"_").trim('_').take(100).ifBlank{"item"}
+}
