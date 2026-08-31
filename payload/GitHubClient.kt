@@ -1,6 +1,7 @@
 package com.llmcouncil.mobile.data
 
 import android.util.Base64
+import com.llmcouncil.mobile.domain.RepositoryContentSanitizer
 import com.llmcouncil.mobile.model.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -40,7 +41,7 @@ class GitHubClient(private val settings: SecureSettings) {
         require(settings.getGitHubToken().isNotBlank()) { "GitHub token is not configured" }
         val out = mutableListOf<GitHubRepo>()
         for (page in 1..20) {
-            val req = auth(Request.Builder().url("https://api.github.com/user/repos?per_page=100&page=$page&sort=updated&affiliation=owner,collaborator,organization_member")).build()
+            val req = auth(Request.Builder().url("https://api.github.com/user/repos?per_page=100&page=$page&sort=updated&direction=desc&affiliation=owner,collaborator,organization_member")).build()
             val data = JSONArray(executeText(req))
             for (i in 0 until data.length()) {
                 val o = data.getJSONObject(i)
@@ -48,7 +49,7 @@ class GitHubClient(private val settings: SecureSettings) {
             }
             if (data.length() < 100) break
         }
-        out.distinctBy { it.fullName }.sortedBy { it.fullName.lowercase() }
+        out.distinctBy { it.fullName }.sortedByDescending { it.updatedAt }
     }
 
     suspend fun previewScope(repo: GitHubRepo, ref: String = repo.defaultBranch, customRulesText: String = ""): AuditScopePreview = withContext(Dispatchers.IO) {
@@ -63,38 +64,30 @@ class GitHubClient(private val settings: SecureSettings) {
             val d = classifyScope(item.path, item.size, matcher, customRules)
             AuditScopeEntry(item.path,item.sha,item.size,d.category,d.status,d.reason,d.confidence,d.source)
         }
-        AuditScopePreview(repo.fullName, ref, commitSha, manifest.size, entries)
+        AuditScopePreview(repo.fullName, ref, commitSha, manifest.size, entries, rulesText=customRulesText.trim())
     }
 
     suspend fun loadScopeSamples(
         repoFullName:String,
         commitSha:String,
         paths:Set<String>,
-        maxCharsPerFile:Int=1600
+        maxCharsPerFile:Int=1800
     ):Map<String,String> = withContext(Dispatchers.IO) {
         if(paths.isEmpty()) return@withContext emptyMap()
         require(settings.getGitHubToken().isNotBlank()) { "GitHub token is not configured" }
         val safeRepo = repoFullName.split('/').joinToString("/") { encode(it) }
-        val wanted = paths.toMutableSet()
-        val found = linkedMapOf<String,String>()
-        val archive = auth(Request.Builder().url("https://api.github.com/repos/$safeRepo/zipball/$commitSha")).build()
-        http.newCall(archive).execute().use { response ->
-            if (!response.isSuccessful) throw githubError(response.code,response.body?.string().orEmpty())
-            val body = response.body ?: throw IllegalStateException("GitHub returned an empty repository archive")
-            ZipInputStream(body.byteStream().buffered()).use { zip ->
-                var entry = zip.nextEntry
-                while(entry != null && wanted.isNotEmpty()) {
-                    if(!entry.isDirectory) {
-                        val path = entry.name.substringAfter('/',entry.name)
-                        if(path in wanted) {
-                            val bytes = zip.readBytes()
-                            val text = if(bytes.any { it.toInt()==0 }) "<binary/non-text sample>" else String(bytes,StandardCharsets.UTF_8).take(maxCharsPerFile)
-                            found[path]=text
-                            wanted.remove(path)
-                        }
-                    }
-                    zip.closeEntry(); entry=zip.nextEntry
-                }
+        val (_,treeSha)=resolveCommitAndTree(safeRepo,commitSha)
+        val meta=loadCompleteTreeManifest(safeRepo,treeSha).associateBy{it.path}
+        val found=linkedMapOf<String,String>()
+        for(path in paths.sorted()) {
+            val item=meta[path] ?: continue
+            if(item.size>1_000_000) continue
+            val raw=loadBlobText(safeRepo,item.sha)
+            if(raw.isBlank()) continue
+            val sanitized=RepositoryContentSanitizer.sanitize(raw,maxCharsPerFile)
+            found[path]=buildString {
+                if(sanitized.redactionCount>0) append("[${sanitized.redactionCount} sensitive value(s) redacted]\n")
+                append(sanitized.text)
             }
         }
         found
@@ -166,10 +159,11 @@ class GitHubClient(private val settings: SecureSettings) {
         fun required(category:String,reason:String,confidence:Int=98,source:String="deterministic")=ScopeDecision(AuditScopeStatus.REQUIRED,category,reason,confidence,source)
         fun review(category:String,reason:String,confidence:Int=50)=ScopeDecision(AuditScopeStatus.NEEDS_REVIEW,category,reason,confidence,"deterministic")
 
-        if (size > 1_000_000) return excluded("excluded-large","file exceeds 1 MB audit ingestion limit")
+        if (size > 1_000_000) return excluded("excluded-large","hard exclusion: file exceeds 1 MB audit ingestion limit",100,"hard-rule")
         val binary = setOf(".png",".jpg",".jpeg",".gif",".webp",".ico",".pdf",".zip",".gz",".7z",".jar",".aar",".apk",".so",".dll",".exe",".bin",".mp3",".wav",".flac",".mp4",".mov",".avi",".woff",".woff2",".ttf",".otf",".class",".pyc",".pyo",".o",".a",".dylib",".map",".sqlite",".sqlite3",".db",".db-shm",".db-wal")
-        if (ext in binary) return excluded("excluded-binary","binary/generated/non-source file type")
-        if (lower.endsWith(".min.js") || lower.endsWith(".min.css")) return excluded("excluded-generated","generated/minified asset")
+        if (ext in binary) return excluded("excluded-binary","hard exclusion: binary/generated/non-source file type",100,"hard-rule")
+        if (lower.startsWith(".dev/") || lower == ".dev") return excluded("excluded-dev","hard exclusion: .dev workspace is outside audit scope",100,"hard-rule")
+        if (lower.endsWith(".min.js") || lower.endsWith(".min.css")) return excluded("excluded-generated","hard exclusion: generated/minified asset",100,"hard-rule")
 
         customRules.lastOrNull { it.regex.matches(lower) }?.let { rule ->
             return if (rule.include) required("custom-required","included by repository-specific rule: ${rule.sourceLine}",100,"user-rule")
@@ -178,8 +172,8 @@ class GitHubClient(private val settings: SecureSettings) {
 
         val generatedDirs = setOf(".git","node_modules","vendor","dist","dist-ssr","build",".gradle",".idea","coverage","target","pods",".venv","venv","env","__pycache__",".pytest_cache",".mypy_cache",".ruff_cache",".tox",".next",".nuxt",".svelte-kit",".parcel-cache",".turbo",".cache",".uv-cache","site-packages","bin","obj","generated","generated-src","playwright-report","allure-results","test-results")
         if (segments.any { it in generatedDirs }) return excluded("excluded-generated","generated/vendor/cache directory")
-        if (lower.startsWith(".dev/") || lower == ".dev" || lower.startsWith("investigation/") || lower.contains("/generated-evidence/") || lower.contains("/audit-evidence/") || lower.contains("/historical-evidence/") || lower.contains("/forensics/") || lower.contains("/forensic-output/")) return excluded("excluded-historical-evidence","historical/diagnostic evidence workspace")
-        if (ignore.isIgnored(lower)) return excluded("excluded-repository-ignored","matches repository .gitignore")
+        if (lower.startsWith("investigation/") || lower.contains("/generated-evidence/") || lower.contains("/audit-evidence/") || lower.contains("/historical-evidence/") || lower.contains("/forensics/") || lower.contains("/forensic-output/")) return excluded("excluded-historical-evidence","historical/diagnostic evidence workspace")
+        if (ignore.isIgnored(lower)) return review("repository-ignored","tracked file matches .gitignore; treated as a signal, not automatic exclusion",65)
 
         val sourceExt = setOf(".kt",".kts",".java",".py",".pyi",".js",".jsx",".mjs",".cjs",".ts",".tsx",".go",".rs",".c",".h",".hpp",".cpp",".cc",".cs",".rb",".php",".swift",".dart",".scala",".sh",".bash",".zsh",".fish",".ps1",".sql",".proto",".graphql",".gql",".vue",".svelte",".html",".htm",".css",".scss",".sass",".less")
         val testPath = segments.any { it in setOf("test","tests","spec","specs","e2e","integration") }
