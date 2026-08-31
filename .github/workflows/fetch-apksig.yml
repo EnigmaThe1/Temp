@@ -1,0 +1,26 @@
+name: Fetch Android APK Signer
+
+on:
+  push:
+    branches:
+      - 'build/**'
+
+permissions:
+  contents: read
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download official apksig
+        run: |
+          curl --fail --location --retry 3 \
+            https://dl.google.com/dl/android/maven2/com/android/tools/build/apksig/8.7.0/apksig-8.7.0.jar \
+            --output apksig-8.7.0.jar
+          test -s apksig-8.7.0.jar
+      - name: Upload apksig
+        uses: actions/upload-artifact@v4
+        with:
+          name: apksig-8.7.0
+          path: apksig-8.7.0.jar
+          if-no-files-found: error
