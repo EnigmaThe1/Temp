@@ -8,7 +8,16 @@ data class RepoSnapshot(val repo:GitHubRepo,val ref:String,val commitSha:String,
 
 enum class AuditScopeStatus { REQUIRED, EXCLUDED, NEEDS_REVIEW }
 
-data class AuditScopeEntry(val path:String,val sha:String,val size:Long,val category:String,val status:AuditScopeStatus,val reason:String,val confidence:Int,val decisionSource:String="deterministic")
+data class AuditScopeEntry(
+    val path:String,
+    val sha:String,
+    val size:Long,
+    val category:String,
+    val status:AuditScopeStatus,
+    val reason:String,
+    val confidence:Int,
+    val decisionSource:String="deterministic"
+)
 
 data class AuditScopePreview(
     val repoFullName:String,
@@ -27,13 +36,27 @@ data class AuditScopePreview(
     val manifestHash:String get() {
         val canonical=buildString {
             append(repoFullName).append('\n').append(commitSha).append('\n').append(rulesText.trim()).append('\n')
-            manifest.sortedBy{it.path}.forEach { e -> append(e.path).append('|').append(e.sha).append('|').append(e.status.name).append('|').append(e.category).append('\n') }
+            manifest.sortedBy{it.path}.forEach { e ->
+                append(e.path).append('|').append(e.sha).append('|').append(e.status.name).append('|').append(e.category).append('\n')
+            }
         }
         return RepositoryContentSanitizer.sha256(canonical)
     }
 }
 
-data class AuditPreflight(val requiredFiles:Int,val excludedFiles:Int,val reviewers:Int,val estimatedBatchesPerReviewer:Int,val estimatedRequests:Int,val estimatedInputChars:Long,val estimatedOutputTokens:Long,val estimatedMinutesLow:Int,val estimatedMinutesHigh:Int,val manifestHash:String,val providers:List<String>)
+data class AuditPreflight(
+    val requiredFiles:Int,
+    val excludedFiles:Int,
+    val reviewers:Int,
+    val estimatedBatchesPerReviewer:Int,
+    val estimatedRequests:Int,
+    val estimatedInputChars:Long,
+    val estimatedOutputTokens:Long,
+    val estimatedMinutesLow:Int,
+    val estimatedMinutesHigh:Int,
+    val manifestHash:String,
+    val providers:List<String>
+)
 
 data class FileCoverage(val path:String,val model:String,val covered:Boolean,val batchIndex:Int,val error:String?=null)
 data class ModelRepoAudit(val model:String,val report:String,val coverage:List<FileCoverage>,val batchReports:List<String>,val complete:Boolean,val error:String?=null){ val coveredCount get()=coverage.count{it.covered}; val requiredCount get()=coverage.size }
