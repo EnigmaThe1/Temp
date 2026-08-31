@@ -1,18 +1,25 @@
 package com.llmcouncil.mobile
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -20,393 +27,58 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.llmcouncil.mobile.data.RepoAuditHistoryItem
 import com.llmcouncil.mobile.model.*
+import java.text.DateFormat
+import java.util.Date
 
-class RepoAuditActivity : ComponentActivity() {
-    private lateinit var vm: RepoAuditViewModel
-    private val folderPicker = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
-        if (uri != null) {
-            try { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) } catch (_: Exception) { }
-            vm.setExportTree(uri)
-        }
-    }
-
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
-        vm = ViewModelProvider(this)[RepoAuditViewModel::class.java]
-        setContent {
-            MaterialTheme(colorScheme = if (androidx.compose.foundation.isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {
-                RepoAuditScreen(vm, { folderPicker.launch(null) }) { finish() }
-            }
-        }
-    }
+class RepoAuditActivity:ComponentActivity(){
+    private lateinit var vm:RepoAuditViewModel
+    private val folderPicker=registerForActivityResult(ActivityResultContracts.OpenDocumentTree()){uri->if(uri!=null){try{contentResolver.takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)}catch(_:Exception){};vm.setExportTree(uri)}}
+    override fun onCreate(savedInstanceState:Bundle?){super.onCreate(savedInstanceState);enableEdgeToEdge();vm=ViewModelProvider(this)[RepoAuditViewModel::class.java];setContent{MaterialTheme(colorScheme=if(androidx.compose.foundation.isSystemInDarkTheme())darkColorScheme() else lightColorScheme()){RepoAuditScreen(vm,{folderPicker.launch(null)}){finish()}}}}
 }
 
-@Composable
-private fun RepoAuditScreen(vm: RepoAuditViewModel, onChooseFolder: () -> Unit, onBack: () -> Unit) {
-    val repos by vm.repos.collectAsStateWithLifecycle()
-    val loading by vm.loading.collectAsStateWithLifecycle()
-    val message by vm.message.collectAsStateWithLifecycle()
-    val run by vm.run.collectAsStateWithLifecycle()
-    val scopePreview by vm.scopePreview.collectAsStateWithLifecycle()
-    val context = LocalContext.current
-
-    var showToken by remember { mutableStateOf(!vm.githubConfigured()) }
-    var token by remember { mutableStateOf("") }
-    var search by remember { mutableStateOf("") }
-    var selected by remember { mutableStateOf<GitHubRepo?>(null) }
-    var ref by remember { mutableStateOf("") }
-    var customRules by remember { mutableStateOf("") }
-    var showManifest by remember { mutableStateOf(false) }
-    var showOutput by remember { mutableStateOf(false) }
-
-    LaunchedEffect(Unit) { if (vm.githubConfigured()) vm.loadRepos() }
-    if (showManifest && scopePreview != null) ScopeManifestDialog(scopePreview!!, vm) { showManifest = false }
-
-    val running = run.stage in listOf(RepoAuditStage.SNAPSHOT, RepoAuditStage.INDEPENDENT, RepoAuditStage.PEER_REVIEW, RepoAuditStage.VERIFY, RepoAuditStage.CHAIRMAN)
-
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Column { Text("Repository Audit", fontWeight = FontWeight.Bold); Text("OmniCouncil · v${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.labelSmall) } },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back") } },
-                actions = {
-                    IconButton(onClick = { showToken = !showToken }) { Icon(Icons.Default.Key, "GitHub credential") }
-                    IconButton(onClick = { showOutput = !showOutput }) { Icon(Icons.Default.Folder, "Output settings") }
-                }
-            )
-        }
-    ) { padding ->
-        LazyColumn(
-            Modifier.fillMaxSize().padding(padding),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            if (showToken) {
-                item {
-                    ElevatedCard(Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text("GitHub access", fontWeight = FontWeight.Bold)
-                            Text("Fine-grained read token. Stored encrypted with Android Keystore.", style = MaterialTheme.typography.bodySmall)
-                            OutlinedTextField(token, { token = it }, Modifier.fillMaxWidth(), label = { Text("GitHub token") }, visualTransformation = PasswordVisualTransformation(), singleLine = true)
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Button(onClick = { vm.saveGitHubToken(token); token = ""; showToken = false }) { Text("Save") }
-                                if (vm.githubConfigured()) OutlinedButton(onClick = vm::loadRepos) { Text("Reload repos") }
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (showOutput) {
-                item {
-                    ElevatedCard(Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text("Output workspace", fontWeight = FontWeight.Bold)
-                            Text(if (vm.exportTree() != null) "Folder access configured" else "No export folder selected", style = MaterialTheme.typography.bodySmall)
-                            OutlinedButton(onClick = onChooseFolder) { Icon(Icons.Default.CreateNewFolder, null); Spacer(Modifier.width(5.dp)); Text("Choose folder") }
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Button(onClick = vm::exportCurrent, enabled = run.repoFullName.isNotBlank()) { Text("Export audit") }
-                                OutlinedButton(onClick = vm::exportLastCouncil) { Text("Export last council") }
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (loading) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
-            message?.let { msg ->
-                item {
-                    ElevatedCard(
-                        Modifier.fillMaxWidth(),
-                        colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-                    ) {
-                        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Info, null)
-                            Spacer(Modifier.width(8.dp))
-                            Text(msg, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
-                            IconButton(onClick = vm::clearMessage) { Icon(Icons.Default.Close, "Dismiss") }
-                        }
-                    }
-                }
-            }
-
-            if (run.repoFullName.isNotBlank()) {
-                item { AuditProgressCard(run, vm) }
-                if (run.modelAudits.isNotEmpty()) item { IndividualAuditCard(run) }
-                if (run.peerReviews.isNotEmpty()) item { PeerAuditCard(run) }
-                if (run.finalReport.isNotBlank()) item { FinalAuditCard(run) }
-            }
-
-            if (!running) {
-                if (!vm.githubConfigured()) {
-                    item {
-                        ElevatedCard(colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
-                            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Text("Connect GitHub first", fontWeight = FontWeight.Bold)
-                                Text("Tap the key icon above and save a fine-grained read token.", style = MaterialTheme.typography.bodySmall)
-                            }
-                        }
-                    }
-                } else if (selected == null) {
-                    item {
-                        Text("Choose repository", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                        Text("Select one repository to open its dedicated audit workspace.", style = MaterialTheme.typography.bodySmall)
-                    }
-                    item {
-                        OutlinedTextField(
-                            search,
-                            { search = it },
-                            Modifier.fillMaxWidth(),
-                            label = { Text("Search repositories") },
-                            leadingIcon = { Icon(Icons.Default.Search, null) },
-                            trailingIcon = { IconButton(onClick = vm::loadRepos) { Icon(Icons.Default.Refresh, "Reload") } },
-                            singleLine = true
-                        )
-                    }
-                    val filtered = repos.filter { search.isBlank() || it.fullName.contains(search, true) || it.description.contains(search, true) }
-                    items(filtered, key = { it.fullName }) { repo ->
-                        ElevatedCard(Modifier.fillMaxWidth()) {
-                            ListItem(
-                                headlineContent = { Text(repo.fullName, fontWeight = FontWeight.SemiBold) },
-                                supportingContent = { Text("default: ${repo.defaultBranch}${repo.description.takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()}", maxLines = 2, overflow = TextOverflow.Ellipsis) },
-                                leadingContent = { Icon(if (repo.privateRepo) Icons.Default.Lock else Icons.Default.Public, null) },
-                                trailingContent = {
-                                    Button(onClick = {
-                                        selected = repo
-                                        ref = repo.defaultBranch
-                                        customRules = vm.scopeRules(repo.fullName)
-                                        vm.clearScopePreview()
-                                    }) { Text("Open") }
-                                }
-                            )
-                        }
-                    }
-                } else {
-                    val repo = selected!!
-                    item {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text("Audit setup", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                                Text(repo.fullName, style = MaterialTheme.typography.bodySmall)
-                            }
-                            TextButton(onClick = { selected = null; vm.clearScopePreview() }) { Text("Change repo") }
-                        }
-                    }
-
-                    item {
-                        ElevatedCard(Modifier.fillMaxWidth()) {
-                            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                Text("1 · Repository & scope", fontWeight = FontWeight.Bold)
-                                OutlinedTextField(ref, { ref = it; vm.clearScopePreview() }, Modifier.fillMaxWidth(), label = { Text("Branch / tag / commit") }, singleLine = true)
-                                OutlinedTextField(
-                                    value = customRules,
-                                    onValueChange = { customRules = it; vm.clearScopePreview() },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    label = { Text("Optional include / exclude rules") },
-                                    placeholder = { Text("exclude: .dev/**\nexclude: docs/archive/**\ninclude: backend/migrations/**") },
-                                    supportingText = { Text("Optional. One rule per line. Exclusions are applied before AI scope preparation. Last matching rule wins.") },
-                                    minLines = 3,
-                                    maxLines = 7
-                                )
-                            }
-                        }
-                    }
-
-                    item {
-                        val reviewers = vm.auditReviewerModels()
-                        val chairman = vm.auditChairman()
-                        ElevatedCard(Modifier.fillMaxWidth()) {
-                            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Text("2 · Review team", fontWeight = FontWeight.Bold)
-                                Text(if (vm.auditAllocationReady()) "${reviewers.size} independent reviewers configured" else "Review team is incomplete", style = MaterialTheme.typography.bodySmall)
-                                reviewers.take(4).forEachIndexed { index, model -> Text("Reviewer ${index + 1}: $model", style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-                                if (reviewers.size > 4) Text("+ ${reviewers.size - 4} more reviewers", style = MaterialTheme.typography.labelSmall)
-                                Text("Final Reviewer: ${chairman.ifBlank { "Not assigned" }}", style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                OutlinedButton(onClick = { context.startActivity(Intent(context, AuditModelAllocationActivity::class.java)) }) {
-                                    Icon(Icons.Default.Groups, null); Spacer(Modifier.width(6.dp)); Text("Configure audit models")
-                                }
-                            }
-                        }
-                    }
-
-                    item {
-                        ElevatedCard(Modifier.fillMaxWidth(), colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-                            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                                Text("3 · Automatic audit scope", fontWeight = FontWeight.Bold)
-                                Text("OmniCouncil maps every tracked file, applies your exclusions, groups ambiguous files into related families, and asks the allocated AI reviewers to classify those families using repository metadata plus representative file snippets. You do not need to inspect thousands of files manually.", style = MaterialTheme.typography.bodySmall)
-                                Button(
-                                    onClick = { vm.prepareScope(repo, ref, customRules) },
-                                    enabled = !loading && vm.auditAllocationReady(),
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Icon(Icons.Default.AutoAwesome, null); Spacer(Modifier.width(6.dp)); Text(if (scopePreview == null) "Prepare audit automatically" else "Rebuild automatic scope")
-                                }
-                            }
-                        }
-                    }
-
-                    val preview = scopePreview?.takeIf { it.repoFullName == repo.fullName && it.ref == ref.ifBlank { repo.defaultBranch } }
-                    if (preview != null) {
-                        item { AutomaticScopeSummaryCard(preview) { showManifest = true } }
-                        if (preview.unresolvedFiles > 0) {
-                            item {
-                                Button(onClick = vm::retryAutomaticScope, enabled = !loading, modifier = Modifier.fillMaxWidth()) {
-                                    Icon(Icons.Default.Refresh, null); Spacer(Modifier.width(6.dp)); Text("Retry automatic scope for ${preview.unresolvedFiles} unresolved")
-                                }
-                            }
-                        }
-                        item {
-                            Button(
-                                onClick = { vm.start(repo, ref) },
-                                enabled = preview.unresolvedFiles == 0 && preview.requiredFiles > 0 && !loading,
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Icon(Icons.Default.FactCheck, null); Spacer(Modifier.width(6.dp)); Text(if (preview.unresolvedFiles == 0) "Start exhaustive audit" else "Audit waiting for automatic scope")
-                            }
-                        }
-                    }
-                }
-            }
+@Composable private fun RepoAuditScreen(vm:RepoAuditViewModel,onChooseFolder:()->Unit,onBack:()->Unit){
+    val repos by vm.repos.collectAsStateWithLifecycle();val branches by vm.branches.collectAsStateWithLifecycle();val history by vm.history.collectAsStateWithLifecycle();val loading by vm.loading.collectAsStateWithLifecycle();val message by vm.message.collectAsStateWithLifecycle();val run by vm.run.collectAsStateWithLifecycle();val scopePreview by vm.scopePreview.collectAsStateWithLifecycle();val preflight by vm.preflight.collectAsStateWithLifecycle();val privacyConfirmed by vm.privacyConfirmed.collectAsStateWithLifecycle();val allocationVersion by vm.auditAllocationVersion.collectAsStateWithLifecycle();val context=LocalContext.current
+    var showToken by rememberSaveable{mutableStateOf(!vm.githubConfigured())};var token by rememberSaveable{mutableStateOf("")};var search by rememberSaveable{mutableStateOf("")};var selectedName by rememberSaveable{mutableStateOf("")};var ref by rememberSaveable{mutableStateOf("")};var customRules by rememberSaveable{mutableStateOf("")};var showManifest by remember{mutableStateOf(false)};var showOutput by rememberSaveable{mutableStateOf(false)};var viewMode by rememberSaveable{mutableStateOf(if(run.repoFullName.isNotBlank())"run" else "new")};var advancedRevision by rememberSaveable{mutableStateOf(false)};var historyItem by remember{mutableStateOf<RepoAuditHistoryItem?>(null)}
+    val lifecycleOwner=LocalLifecycleOwner.current;DisposableEffect(lifecycleOwner){val observer=LifecycleEventObserver{_,event->if(event==Lifecycle.Event.ON_RESUME)vm.refreshAuditAllocation()};lifecycleOwner.lifecycle.addObserver(observer);onDispose{lifecycleOwner.lifecycle.removeObserver(observer)}}
+    LaunchedEffect(Unit){if(vm.githubConfigured())vm.loadRepos();vm.loadHistory()};val selected=repos.firstOrNull{it.fullName==selectedName};if(showManifest&&scopePreview!=null)ScopeManifestDialog(scopePreview!!,vm){showManifest=false};historyItem?.let{item->HistoryReportDialog(item,{vm.deleteHistory(item.id);historyItem=null}){historyItem=null}}
+    val running=run.stage in listOf(RepoAuditStage.SNAPSHOT,RepoAuditStage.INDEPENDENT,RepoAuditStage.PEER_REVIEW,RepoAuditStage.VERIFY,RepoAuditStage.CHAIRMAN);val notificationLauncher=rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()){}
+    Scaffold(topBar={TopAppBar(title={Column{Text("Repository Audit",fontWeight=FontWeight.Bold);Text("OmniCouncil · v${BuildConfig.VERSION_NAME}",style=MaterialTheme.typography.labelSmall)}},navigationIcon={IconButton(onClick=onBack){Icon(Icons.Default.ArrowBack,"Back")}},actions={IconButton(onClick={showToken=!showToken}){Icon(Icons.Default.Key,"GitHub access")};IconButton(onClick={showOutput=!showOutput}){Icon(Icons.Default.Folder,"Output")}})}){padding->
+        LazyColumn(Modifier.fillMaxSize().padding(padding),contentPadding=PaddingValues(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
+            if(showToken)item{GitHubAccessCard(vm,token,{token=it},{token="";showToken=false})};if(showOutput)item{OutputCard(vm,onChooseFolder)};message?.let{msg->item{MessageCard(msg,vm::clearMessage)}}
+            if(run.repoFullName.isNotBlank()||history.isNotEmpty())item{Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){FilterChip(viewMode=="new",{viewMode="new"},label={Text("New audit")});FilterChip(viewMode=="run",{viewMode="run"},label={Text(if(running)"Active / history" else "Audit history")})}}
+            if(viewMode=="run"){
+                if(run.repoFullName.isNotBlank()){item{AuditProgressCard(run,vm)};if(run.modelAudits.isNotEmpty())item{IndividualAuditCard(run)};if(run.peerReviews.isNotEmpty())item{PeerAuditCard(run)};if(run.verificationMemo.isNotBlank())item{VerificationCard(run)};if(run.finalReport.isNotBlank())item{FinalAuditCard(run)}}
+                if(history.isNotEmpty()){item{Text("Previous completed audits",style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.Bold)};items(history,key={"history-${it.id}"}){h->ElevatedCard(Modifier.fillMaxWidth().clickable{historyItem=h}){ListItem(headlineContent={Text(h.repoFullName,fontWeight=FontWeight.SemiBold)},supportingContent={Text("${h.commitSha.take(10)} · ${h.requiredFiles} files · ${DateFormat.getDateTimeInstance().format(Date(h.finishedAt))}",maxLines=2)},leadingContent={Icon(Icons.Default.History,null)},trailingContent={Icon(Icons.Default.ChevronRight,null)})}}}
+                if(run.repoFullName.isBlank()&&history.isEmpty())item{Box(Modifier.fillMaxWidth().padding(24.dp),contentAlignment=Alignment.Center){Text("No repository audits yet")}}
+            }else if(!running){
+                if(!vm.githubConfigured())item{ElevatedCard(colors=CardDefaults.elevatedCardColors(containerColor=MaterialTheme.colorScheme.errorContainer)){Column(Modifier.padding(14.dp)){Text("Connect GitHub",fontWeight=FontWeight.Bold);Text("Use a fine-grained read-only token. Tap the key icon above.",style=MaterialTheme.typography.bodySmall)}}}
+                else if(selected==null){item{Text("Choose repository",style=MaterialTheme.typography.headlineSmall,fontWeight=FontWeight.Bold);Text("Recent repositories are shown first. Search when needed.",style=MaterialTheme.typography.bodySmall)};item{OutlinedTextField(search,{search=it},Modifier.fillMaxWidth(),label={Text("Search repositories")},leadingIcon={Icon(Icons.Default.Search,null)},trailingIcon={IconButton(onClick=vm::loadRepos){Icon(Icons.Default.Refresh,"Reload")}},singleLine=true)};if(loading)item{LinearProgressIndicator(Modifier.fillMaxWidth())};val filtered=repos.filter{search.isBlank()||it.fullName.contains(search,true)||it.description.contains(search,true)};items(filtered,key={it.fullName}){repo->ElevatedCard(Modifier.fillMaxWidth().clickable{selectedName=repo.fullName;ref=repo.defaultBranch;customRules=vm.scopeRules(repo.fullName);advancedRevision=false;vm.clearScopePreview();vm.loadBranches(repo.fullName)}){ListItem(headlineContent={Text(repo.fullName,fontWeight=FontWeight.SemiBold)},supportingContent={Text("${if(repo.privateRepo)"Private" else "Public"} · default ${repo.defaultBranch}${repo.description.takeIf{it.isNotBlank()}?.let{" · $it"}.orEmpty()}",maxLines=2,overflow=TextOverflow.Ellipsis)},leadingContent={Icon(if(repo.privateRepo)Icons.Default.Lock else Icons.Default.Public,null)},trailingContent={Icon(Icons.Default.ChevronRight,null)})}}}
+                else{val repo=selected;item{Row(verticalAlignment=Alignment.CenterVertically){Column(Modifier.weight(1f)){Text("New repository audit",style=MaterialTheme.typography.headlineSmall,fontWeight=FontWeight.Bold);Text(repo.fullName,style=MaterialTheme.typography.bodySmall)};TextButton(onClick={selectedName="";vm.clearBranches();vm.clearScopePreview()}){Text("Change")}}};item{StepCard("1","Repository & scope rules"){BranchSelector(ref,branches,repo.defaultBranch,{ref=it;vm.clearScopePreview()},{advancedRevision=!advancedRevision});if(advancedRevision)OutlinedTextField(ref,{ref=it;vm.clearScopePreview()},Modifier.fillMaxWidth(),label={Text("Advanced tag / commit / revision")},supportingText={Text("Enter a tag or commit SHA only when you intentionally need a revision not listed as a branch.")},singleLine=true);OutlinedTextField(customRules,{customRules=it;vm.clearScopePreview()},Modifier.fillMaxWidth(),label={Text("Optional repository-specific rules")},placeholder={Text("exclude: docs/archive/**\nexclude: evidence/**\ninclude: backend/migrations/**")},supportingText={Text("One include:/exclude: glob per line. .dev/**, binary files and hard ingestion limits are always excluded and cannot be overridden.")},minLines=3,maxLines=7)}};item{val reviewers=vm.auditReviewerModels();val finalReviewer=vm.auditChairman();StepCard("2","Review team"){Text(if(vm.auditAllocationReady())"${reviewers.size} Reviewers + Final Reviewer configured" else "Team incomplete",style=MaterialTheme.typography.bodySmall);reviewers.take(4).forEachIndexed{i,id->Text("Reviewer ${i+1} · ${ModelSource.fromKey(id).displayName}",style=MaterialTheme.typography.labelSmall)};if(reviewers.size>4)Text("+ ${reviewers.size-4} more",style=MaterialTheme.typography.labelSmall);Text("Final Reviewer · ${if(finalReviewer.isBlank())"Not assigned" else ModelSource.fromKey(finalReviewer).displayName}",style=MaterialTheme.typography.labelSmall);OutlinedButton(onClick={context.startActivity(Intent(context,AuditModelAllocationActivity::class.java))}){Icon(Icons.Default.Groups,null);Spacer(Modifier.width(6.dp));Text("Configure review team")}}};item{StepCard("3","Automatic scope preparation"){Text("OmniCouncil maps every tracked file, applies hard and repository-specific rules, then lets multiple allocated AI models classify ambiguous file families from metadata plus sanitized representative snippets. Manual file-by-file review is not part of the normal workflow.",style=MaterialTheme.typography.bodySmall);Button(onClick={vm.prepareScope(repo,ref,customRules)},enabled=!loading&&vm.auditAllocationReady(),modifier=Modifier.fillMaxWidth()){Icon(Icons.Default.AutoAwesome,null);Spacer(Modifier.width(6.dp));Text(if(scopePreview==null)"Prepare audit scope" else "Rebuild audit scope")};if(loading)OutlinedButton(onClick=vm::cancelScopePreparation,modifier=Modifier.fillMaxWidth()){Icon(Icons.Default.Stop,null);Spacer(Modifier.width(6.dp));Text("Cancel preparation")}}};val preview=scopePreview?.takeIf{it.repoFullName==repo.fullName&&it.ref==ref.ifBlank{repo.defaultBranch}};if(preview!=null){item{AutomaticScopeSummaryCard(preview){showManifest=true}};if(preview.unresolvedFiles>0)item{Button(onClick=vm::retryAutomaticScope,enabled=!loading,modifier=Modifier.fillMaxWidth()){Icon(Icons.Default.Refresh,null);Spacer(Modifier.width(6.dp));Text("Retry ${preview.unresolvedFiles} unresolved")}}};if(preview!=null&&preview.unresolvedFiles==0&&preflight!=null){item{PreflightCard(preflight!!,privacyConfirmed,{vm.setPrivacyConfirmed(it)},{if(Build.VERSION.SDK_INT>=33&&ContextCompat.checkSelfPermission(context,Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)})};item{Button(onClick={vm.start(repo,ref);viewMode="run"},enabled=privacyConfirmed&&!loading,modifier=Modifier.fillMaxWidth()){Icon(Icons.Default.PlayArrow,null);Spacer(Modifier.width(6.dp));Text("Start exhaustive audit")}}}}
+            }else if(running&&viewMode=="new")item{ElevatedCard(colors=CardDefaults.elevatedCardColors(containerColor=MaterialTheme.colorScheme.secondaryContainer)){Column(Modifier.padding(14.dp)){Text("An audit is already running",fontWeight=FontWeight.Bold);Text("Open Active / history to follow progress or cancel it before configuring another repository.",style=MaterialTheme.typography.bodySmall);TextButton(onClick={viewMode="run"}){Text("Open active audit")}}}}
         }
     }
 }
 
-@Composable
-private fun AutomaticScopeSummaryCard(preview: AuditScopePreview, onAdvanced: () -> Unit) {
-    val customDecisions = preview.manifest.count { it.decisionSource == "user-rule" }
-    val aiDecisions = preview.manifest.count { it.decisionSource.startsWith("scope-ai:") }
-    ElevatedCard(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("Automatic scope result", fontWeight = FontWeight.Bold)
-            Text("Commit ${preview.commitSha.take(12)}", style = MaterialTheme.typography.labelSmall)
-            Text("${preview.totalTrackedFiles} tracked · ${preview.requiredFiles} audit files · ${preview.excludedFiles} excluded · ${preview.unresolvedFiles} unresolved", style = MaterialTheme.typography.bodySmall)
-            if (customDecisions > 0) Text("$customDecisions decisions from your repository rules", style = MaterialTheme.typography.labelSmall)
-            if (aiDecisions > 0) Text("$aiDecisions files classified by AI scope analysis", style = MaterialTheme.typography.labelSmall)
-            preview.requiredByCategory.entries.sortedByDescending { it.value }.forEach { (category, count) -> Text("• $category: $count", style = MaterialTheme.typography.labelSmall) }
-            if (preview.validationSummary.isNotBlank()) Text(preview.validationSummary, style = MaterialTheme.typography.bodySmall, color = if (preview.unresolvedFiles == 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
-            TextButton(onClick = onAdvanced) { Icon(Icons.Default.Tune, null); Spacer(Modifier.width(5.dp)); Text("Advanced inspection") }
-        }
-    }
-}
-
-@Composable
-private fun ScopeManifestDialog(preview: AuditScopePreview, vm: RepoAuditViewModel, onDismiss: () -> Unit) {
-    var query by remember { mutableStateOf("") }
-    var filter by remember { mutableStateOf<AuditScopeStatus?>(null) }
-    val filtered = preview.manifest.filter { (filter == null || it.status == filter) && (query.isBlank() || it.path.contains(query, true) || it.reason.contains(query, true) || it.category.contains(query, true)) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
-        title = { Text("Advanced scope manifest · ${filtered.size}/${preview.totalTrackedFiles}") },
-        text = {
-            Column(Modifier.fillMaxWidth().heightIn(max = 620.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Normally no manual action is needed. Use this only to inspect or override an exceptional decision.", style = MaterialTheme.typography.bodySmall)
-                OutlinedTextField(query, { query = it }, Modifier.fillMaxWidth(), label = { Text("Search path / reason") }, singleLine = true)
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    FilterChip(selected = filter == null, onClick = { filter = null }, label = { Text("All") })
-                    FilterChip(selected = filter == AuditScopeStatus.REQUIRED, onClick = { filter = AuditScopeStatus.REQUIRED }, label = { Text("Required") })
-                    FilterChip(selected = filter == AuditScopeStatus.EXCLUDED, onClick = { filter = AuditScopeStatus.EXCLUDED }, label = { Text("Excluded") })
-                }
-                FilterChip(selected = filter == AuditScopeStatus.NEEDS_REVIEW, onClick = { filter = AuditScopeStatus.NEEDS_REVIEW }, label = { Text("Unresolved (${preview.unresolvedFiles})") })
-                HorizontalDivider()
-                LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(filtered, key = { it.path }) { entry -> ScopeEntryRow(entry, vm) }
-                }
-            }
-        }
-    )
-}
-
-@Composable
-private fun ScopeEntryRow(entry: AuditScopeEntry, vm: RepoAuditViewModel) {
-    ElevatedCard(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(entry.path, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
-            Text("${entry.status.name.replace('_',' ')} · ${entry.category} · confidence ${entry.confidence}%", style = MaterialTheme.typography.labelSmall)
-            Text(entry.reason, style = MaterialTheme.typography.labelSmall)
-            Text("decision: ${entry.decisionSource}", style = MaterialTheme.typography.labelSmall)
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                TextButton(onClick = { vm.overrideScope(entry.path, AuditScopeStatus.REQUIRED) }) { Text("Require") }
-                TextButton(onClick = { vm.overrideScope(entry.path, AuditScopeStatus.EXCLUDED) }) { Text("Exclude") }
-            }
-        }
-    }
-}
-
-@Composable
-private fun AuditProgressCard(run: RepoAuditRun, vm: RepoAuditViewModel) {
-    val running = run.stage in listOf(RepoAuditStage.SNAPSHOT, RepoAuditStage.INDEPENDENT, RepoAuditStage.PEER_REVIEW, RepoAuditStage.VERIFY, RepoAuditStage.CHAIRMAN)
-    ElevatedCard(Modifier.fillMaxWidth(), colors = if (run.stage == RepoAuditStage.ERROR) CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.errorContainer) else CardDefaults.elevatedCardColors()) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(run.repoFullName, fontWeight = FontWeight.Bold)
-            Text("Ref/commit: ${run.ref} · ${run.commitSha.ifBlank { "resolving…" }}", style = MaterialTheme.typography.bodySmall)
-            Text("Stage: ${run.stage.name.replace('_',' ')}", fontWeight = FontWeight.SemiBold)
-            Text("${run.requiredFiles} validated audit files · ${run.excludedFiles} explicit exclusions", style = MaterialTheme.typography.bodySmall)
-            run.modelAudits.forEach { a ->
-                val pct = if (a.requiredCount == 0) 0 else a.coveredCount * 100 / a.requiredCount
-                Text("${a.model}: ${a.coveredCount}/${a.requiredCount} ($pct%)${if (a.complete) " ✓" else ""}", style = MaterialTheme.typography.labelSmall)
-            }
-            run.errors.forEach { (k, v) -> Text("$k: $v", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (running) OutlinedButton(onClick = vm::cancel) { Text("Cancel") }
-                if (!running) TextButton(onClick = vm::clear) { Text("Clear run") }
-            }
-        }
-    }
-}
-
-@Composable
-private fun IndividualAuditCard(run: RepoAuditRun) {
-    var expanded by remember { mutableStateOf(setOf<String>()) }
-    ElevatedCard(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(14.dp)) {
-            Text("Independent repository audits", fontWeight = FontWeight.Bold)
-            run.modelAudits.forEach { audit ->
-                HorizontalDivider(Modifier.padding(vertical = 8.dp))
-                val full = audit.model in expanded
-                Text(audit.model, fontWeight = FontWeight.SemiBold)
-                Text("Coverage ${audit.coveredCount}/${audit.requiredCount} · complete=${audit.complete}", style = MaterialTheme.typography.labelSmall)
-                audit.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-                if (audit.report.isNotBlank()) {
-                    Text(audit.report, maxLines = if (full) Int.MAX_VALUE else 10, overflow = if (full) TextOverflow.Clip else TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
-                    TextButton(onClick = { expanded = if (full) expanded - audit.model else expanded + audit.model }) { Text(if (full) "Collapse report" else "Show full report") }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun PeerAuditCard(run: RepoAuditRun) {
-    var expanded by remember { mutableStateOf(false) }
-    ElevatedCard(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(14.dp)) {
-            Text("Peer review & ranking", fontWeight = FontWeight.Bold)
-            run.aggregate.forEachIndexed { i, r -> Text("${i + 1}. ${r.model} · avg ${r.averageRank} · ${r.votes} votes", style = MaterialTheme.typography.bodySmall) }
-            TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "Hide peer reviews" else "Show peer reviews") }
-            if (expanded) run.peerReviews.forEach { r ->
-                HorizontalDivider(Modifier.padding(vertical = 6.dp))
-                Text(r.model, fontWeight = FontWeight.SemiBold)
-                Text(r.error ?: r.text, style = MaterialTheme.typography.bodySmall)
-            }
-        }
-    }
-}
-
-@Composable
-private fun FinalAuditCard(run: RepoAuditRun) {
-    var full by remember { mutableStateOf(false) }
-    ElevatedCard(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(14.dp)) {
-            Text("Final verified council audit", fontWeight = FontWeight.Bold)
-            Text("Final Reviewer: ${run.chairmanModel}", style = MaterialTheme.typography.labelSmall)
-            Spacer(Modifier.height(8.dp))
-            Text(run.finalReport, maxLines = if (full) Int.MAX_VALUE else 16, overflow = if (full) TextOverflow.Clip else TextOverflow.Ellipsis)
-            TextButton(onClick = { full = !full }) { Text(if (full) "Collapse final report" else "Show full final report") }
-        }
-    }
-}
+@Composable private fun BranchSelector(current:String,branches:List<String>,defaultBranch:String,onSelect:(String)->Unit,onAdvanced:()->Unit){var open by remember{mutableStateOf(false)};Column(verticalArrangement=Arrangement.spacedBy(6.dp)){Text("Revision",style=MaterialTheme.typography.labelMedium);Box{OutlinedButton(onClick={open=true},modifier=Modifier.fillMaxWidth()){Icon(Icons.Default.AccountTree,null);Spacer(Modifier.width(6.dp));Text(current.ifBlank{defaultBranch},Modifier.weight(1f),maxLines=1,overflow=TextOverflow.Ellipsis);Icon(Icons.Default.ArrowDropDown,null)};DropdownMenu(open,{open=false}){(if(branches.isEmpty())listOf(defaultBranch)else branches).distinct().forEach{b->DropdownMenuItem(text={Text(b)},onClick={onSelect(b);open=false})}}};TextButton(onClick=onAdvanced){Text("Advanced tag / commit")}}}
+@Composable private fun HistoryReportDialog(item:RepoAuditHistoryItem,onDelete:()->Unit,onDismiss:()->Unit){AlertDialog(onDismissRequest=onDismiss,title={Text(item.repoFullName)},text={Column(Modifier.fillMaxWidth().heightIn(max=620.dp),verticalArrangement=Arrangement.spacedBy(6.dp)){Text("Commit ${item.commitSha.take(12)} · scope ${item.scopeHash.take(12)}",style=MaterialTheme.typography.labelSmall);Text("${item.requiredFiles} audited · ${item.excludedFiles} excluded",style=MaterialTheme.typography.bodySmall);Text("Final Reviewer: ${ModelSource.fromKey(item.finalReviewer).displayName}",style=MaterialTheme.typography.bodySmall);HorizontalDivider();SelectionContainer{LazyColumn{item{Text(item.finalReport)}}}}},confirmButton={TextButton(onClick=onDismiss){Text("Close")}},dismissButton={TextButton(onClick=onDelete){Text("Delete")}})}
+@Composable private fun GitHubAccessCard(vm:RepoAuditViewModel,token:String,onToken:(String)->Unit,onSaved:()->Unit){ElevatedCard(Modifier.fillMaxWidth()){Column(Modifier.padding(14.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){Text("GitHub access",fontWeight=FontWeight.Bold);Text(if(vm.githubConfigured())"Connected with an encrypted fine-grained token" else "Connect with a fine-grained read token",style=MaterialTheme.typography.bodySmall);OutlinedTextField(token,onToken,Modifier.fillMaxWidth(),label={Text("GitHub token")},visualTransformation=PasswordVisualTransformation(),singleLine=true);Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){Button(onClick={vm.saveGitHubToken(token);onSaved()},enabled=token.isNotBlank()){Text(if(vm.githubConfigured())"Replace" else "Connect")};if(vm.githubConfigured())OutlinedButton(onClick=vm::disconnectGitHub){Text("Disconnect")}}}}}
+@Composable private fun OutputCard(vm:RepoAuditViewModel,onChooseFolder:()->Unit){ElevatedCard(Modifier.fillMaxWidth()){Column(Modifier.padding(14.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){Text("Repository Audit exports",fontWeight=FontWeight.Bold);Text(if(vm.exportTree()!=null)"Output folder configured" else "No output folder selected",style=MaterialTheme.typography.bodySmall);OutlinedButton(onClick=onChooseFolder){Icon(Icons.Default.CreateNewFolder,null);Spacer(Modifier.width(5.dp));Text("Choose folder")};Button(onClick=vm::exportCurrent,enabled=vm.run.value.repoFullName.isNotBlank()){Icon(Icons.Default.Download,null);Spacer(Modifier.width(5.dp));Text("Export current / last audit")}}}}
+@Composable private fun MessageCard(message:String,onDismiss:()->Unit){ElevatedCard(Modifier.fillMaxWidth(),colors=CardDefaults.elevatedCardColors(containerColor=MaterialTheme.colorScheme.surfaceVariant)){Row(Modifier.padding(12.dp),verticalAlignment=Alignment.CenterVertically){Icon(Icons.Default.Info,null);Spacer(Modifier.width(8.dp));Text(message,Modifier.weight(1f),style=MaterialTheme.typography.bodySmall);IconButton(onClick=onDismiss){Icon(Icons.Default.Close,"Dismiss")}}}}
+@Composable private fun StepCard(number:String,title:String,content:@Composable ColumnScope.()->Unit){ElevatedCard(Modifier.fillMaxWidth()){Column(Modifier.padding(14.dp),verticalArrangement=Arrangement.spacedBy(9.dp)){Text("$number · $title",fontWeight=FontWeight.Bold);content()}}}
+@Composable private fun PreflightCard(p:AuditPreflight,privacyConfirmed:Boolean,onPrivacy:(Boolean)->Unit,onNotifications:()->Unit){ElevatedCard(Modifier.fillMaxWidth(),colors=CardDefaults.elevatedCardColors(containerColor=MaterialTheme.colorScheme.secondaryContainer)){Column(Modifier.padding(14.dp),verticalArrangement=Arrangement.spacedBy(6.dp)){Text("4 · Audit preflight",fontWeight=FontWeight.Bold);Text("${p.requiredFiles} audit files · ${p.excludedFiles} excluded",style=MaterialTheme.typography.bodySmall);Text("${p.reviewers} evidence models · ~${p.estimatedBatchesPerReviewer} batches/model · ~${p.estimatedRequests} API requests",style=MaterialTheme.typography.bodySmall);Text("Estimated duration: ${p.estimatedMinutesLow}–${p.estimatedMinutesHigh} min. Currency cost depends on each selected provider/model pricing and account plan.",style=MaterialTheme.typography.bodySmall);Text("Providers receiving sanitized repository evidence: ${p.providers.joinToString()}",style=MaterialTheme.typography.bodySmall);Text("Scope fingerprint: ${p.manifestHash.take(16)}…",style=MaterialTheme.typography.labelSmall);Row(verticalAlignment=Alignment.Top){Checkbox(privacyConfirmed,onPrivacy);Text("I understand that files in the validated audit scope will be sanitized and sent to the selected external AI providers for analysis.",Modifier.padding(top=10.dp),style=MaterialTheme.typography.bodySmall)};TextButton(onClick=onNotifications){Icon(Icons.Default.Notifications,null);Spacer(Modifier.width(5.dp));Text("Enable progress notifications")}}}}
+@Composable private fun AutomaticScopeSummaryCard(preview:AuditScopePreview,onAdvanced:()->Unit){val custom=preview.manifest.count{it.decisionSource=="user-rule"};val ai=preview.manifest.count{it.decisionSource.startsWith("scope-ai:")};ElevatedCard(Modifier.fillMaxWidth()){Column(Modifier.padding(14.dp),verticalArrangement=Arrangement.spacedBy(6.dp)){Text("Automatic scope result",fontWeight=FontWeight.Bold);Text("Commit ${preview.commitSha.take(12)} · fingerprint ${preview.manifestHash.take(12)}",style=MaterialTheme.typography.labelSmall);Text("${preview.totalTrackedFiles} tracked · ${preview.requiredFiles} audit files · ${preview.excludedFiles} excluded · ${preview.unresolvedFiles} unresolved",style=MaterialTheme.typography.bodySmall);if(custom>0)Text("$custom decisions from repository rules",style=MaterialTheme.typography.labelSmall);if(ai>0)Text("$ai files classified by AI scope analysis",style=MaterialTheme.typography.labelSmall);preview.requiredByCategory.entries.sortedByDescending{it.value}.forEach{(category,count)->Text("• $category: $count",style=MaterialTheme.typography.labelSmall)};if(preview.validationSummary.isNotBlank())Text(preview.validationSummary,style=MaterialTheme.typography.bodySmall,color=if(preview.unresolvedFiles==0)MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error);TextButton(onClick=onAdvanced){Icon(Icons.Default.Tune,null);Spacer(Modifier.width(5.dp));Text("Advanced inspection")}}}}
+@Composable private fun ScopeManifestDialog(preview:AuditScopePreview,vm:RepoAuditViewModel,onDismiss:()->Unit){var query by rememberSaveable{mutableStateOf("")};var filterName by rememberSaveable{mutableStateOf("ALL")};val filter=runCatching{AuditScopeStatus.valueOf(filterName)}.getOrNull();val filtered=preview.manifest.filter{(filter==null||it.status==filter)&&(query.isBlank()||it.path.contains(query,true)||it.reason.contains(query,true)||it.category.contains(query,true))};AlertDialog(onDismissRequest=onDismiss,confirmButton={TextButton(onClick=onDismiss){Text("Done")}},title={Text("Advanced scope · ${filtered.size}/${preview.totalTrackedFiles}")},text={Column(Modifier.fillMaxWidth().heightIn(max=620.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){Text("Normally no manual action is needed. Use this only for exceptional inspection or override.",style=MaterialTheme.typography.bodySmall);OutlinedTextField(query,{query=it},Modifier.fillMaxWidth(),label={Text("Search path / reason")},singleLine=true);Row(horizontalArrangement=Arrangement.spacedBy(4.dp)){FilterChip(filter==null,{filterName="ALL"},label={Text("All")});FilterChip(filter==AuditScopeStatus.REQUIRED,{filterName=AuditScopeStatus.REQUIRED.name},label={Text("Required")});FilterChip(filter==AuditScopeStatus.EXCLUDED,{filterName=AuditScopeStatus.EXCLUDED.name},label={Text("Excluded")})};FilterChip(filter==AuditScopeStatus.NEEDS_REVIEW,{filterName=AuditScopeStatus.NEEDS_REVIEW.name},label={Text("Unresolved")});HorizontalDivider();LazyColumn(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(8.dp)){items(filtered,key={it.path}){entry->ScopeEntryRow(entry,vm)}}}})}
+@Composable private fun ScopeEntryRow(entry:AuditScopeEntry,vm:RepoAuditViewModel){ElevatedCard(Modifier.fillMaxWidth()){Column(Modifier.padding(10.dp),verticalArrangement=Arrangement.spacedBy(3.dp)){Text(entry.path,fontWeight=FontWeight.SemiBold,style=MaterialTheme.typography.bodySmall);Text("${entry.status.name.replace('_',' ')} · ${entry.category} · confidence ${entry.confidence}%",style=MaterialTheme.typography.labelSmall);Text(entry.reason,style=MaterialTheme.typography.labelSmall);Text("decision: ${entry.decisionSource}",style=MaterialTheme.typography.labelSmall);if(!entry.decisionSource.startsWith("hard-rule")){Row(horizontalArrangement=Arrangement.spacedBy(6.dp)){TextButton(onClick={vm.overrideScope(entry.path,AuditScopeStatus.REQUIRED)}){Text("Require")};TextButton(onClick={vm.overrideScope(entry.path,AuditScopeStatus.EXCLUDED)}){Text("Exclude")}}}}}}
+@Composable private fun AuditProgressCard(run:RepoAuditRun,vm:RepoAuditViewModel){val running=run.stage in listOf(RepoAuditStage.SNAPSHOT,RepoAuditStage.INDEPENDENT,RepoAuditStage.PEER_REVIEW,RepoAuditStage.VERIFY,RepoAuditStage.CHAIRMAN);ElevatedCard(Modifier.fillMaxWidth(),colors=if(run.stage==RepoAuditStage.ERROR)CardDefaults.elevatedCardColors(containerColor=MaterialTheme.colorScheme.errorContainer)else CardDefaults.elevatedCardColors()){Column(Modifier.padding(14.dp),verticalArrangement=Arrangement.spacedBy(6.dp)){Text(run.repoFullName,fontWeight=FontWeight.Bold);Text("Commit ${run.commitSha.take(12).ifBlank{"resolving…"}} · scope ${run.scopeManifestHash.take(12).ifBlank{"pending"}}",style=MaterialTheme.typography.bodySmall);Text("Stage: ${run.stage.name.replace('_',' ')}",fontWeight=FontWeight.SemiBold);Text("${run.requiredFiles} audit files · ${run.excludedFiles} excluded",style=MaterialTheme.typography.bodySmall);run.modelAudits.forEach{a->val pct=if(a.requiredCount==0)0 else a.coveredCount*100/a.requiredCount;Text("${ModelSource.fromKey(a.model).displayName}: ${a.coveredCount}/${a.requiredCount} ($pct%)${if(a.complete)" ✓" else ""}",style=MaterialTheme.typography.labelSmall)};run.errors.forEach{(k,v)->Text("$k: $v",color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.bodySmall)};Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){if(running)OutlinedButton(onClick=vm::cancel){Text("Cancel")};if(!running)TextButton(onClick=vm::clear){Text("Clear run")}}}}}
+@Composable private fun IndividualAuditCard(run:RepoAuditRun){var expanded by remember{mutableStateOf(setOf<String>())};ElevatedCard(Modifier.fillMaxWidth()){Column(Modifier.padding(14.dp)){Text("Independent audits",fontWeight=FontWeight.Bold);run.modelAudits.forEachIndexed{i,a->HorizontalDivider(Modifier.padding(vertical=8.dp));val full=a.model in expanded;Text("Reviewer evidence pass ${i+1}",fontWeight=FontWeight.SemiBold);Text("Coverage ${a.coveredCount}/${a.requiredCount} · ${if(a.complete)"complete" else "incomplete"}",style=MaterialTheme.typography.labelSmall);a.error?.let{Text(it,color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.bodySmall)};if(a.report.isNotBlank()){SelectionContainer{Text(a.report,maxLines=if(full)Int.MAX_VALUE else 10,overflow=if(full)TextOverflow.Clip else TextOverflow.Ellipsis,style=MaterialTheme.typography.bodySmall)};TextButton(onClick={expanded=if(full)expanded-a.model else expanded+a.model}){Text(if(full)"Collapse" else "Show report")}}}}}}
+@Composable private fun PeerAuditCard(run:RepoAuditRun){var expanded by remember{mutableStateOf(false)};ElevatedCard(Modifier.fillMaxWidth()){Column(Modifier.padding(14.dp)){Text("Anonymous peer review",fontWeight=FontWeight.Bold);run.aggregate.forEachIndexed{i,r->Text("${i+1}. ${r.model} · avg ${r.averageRank} · ${r.votes} votes",style=MaterialTheme.typography.bodySmall)};TextButton(onClick={expanded=!expanded}){Text(if(expanded)"Hide peer reviews" else "Show peer reviews")};if(expanded)run.peerReviews.forEachIndexed{i,r->HorizontalDivider(Modifier.padding(vertical=6.dp));Text("Peer review ${i+1}",fontWeight=FontWeight.SemiBold);SelectionContainer{Text(r.error?:r.text,style=MaterialTheme.typography.bodySmall)}}}}}
+@Composable private fun VerificationCard(run:RepoAuditRun){var full by remember{mutableStateOf(false)};ElevatedCard(Modifier.fillMaxWidth()){Column(Modifier.padding(14.dp)){Text("Adversarial verification",fontWeight=FontWeight.Bold);SelectionContainer{Text(run.verificationMemo,maxLines=if(full)Int.MAX_VALUE else 10,overflow=if(full)TextOverflow.Clip else TextOverflow.Ellipsis)};TextButton(onClick={full=!full}){Text(if(full)"Collapse" else "Show verification")}}}}
+@Composable private fun FinalAuditCard(run:RepoAuditRun){var full by remember{mutableStateOf(false)};ElevatedCard(Modifier.fillMaxWidth()){Column(Modifier.padding(14.dp)){Text("Final verified audit",fontWeight=FontWeight.Bold);Text("Final Reviewer: ${ModelSource.fromKey(run.chairmanModel).displayName}",style=MaterialTheme.typography.labelSmall);Spacer(Modifier.height(8.dp));SelectionContainer{Text(run.finalReport,maxLines=if(full)Int.MAX_VALUE else 18,overflow=if(full)TextOverflow.Clip else TextOverflow.Ellipsis)};TextButton(onClick={full=!full}){Text(if(full)"Collapse" else "Show full report")}}}}
