@@ -13,7 +13,8 @@ data class AuditModelQualification(
     val ready:Boolean,
     val reason:String,
     val free:Boolean,
-    val replacementFor:String?=null
+    val replacementFor:String?=null,
+    val transient:Boolean=false
 )
 
 data class QualifiedAuditTeam(
@@ -64,11 +65,24 @@ class ModelAuditQualifier(
             val reason="Provider credential does not authorise this model"
             withContext(Dispatchers.IO){healthDb.recordQualification(model.id,QUALIFICATION_VERSION,false,reason)}
             AuditModelQualification(model.id,false,reason,model.isFree)
+        }catch(e:ApiFailure.Network){
+            transient(model,"Network/DNS temporarily unavailable — qualification unchanged")
+        }catch(e:ApiFailure.RateLimit){
+            transient(model,"Provider rate limit reached — qualification unchanged; retry later")
+        }catch(e:ApiFailure.Unavailable){
+            transient(model,"Provider temporarily unavailable — qualification unchanged")
         }catch(e:Exception){
             val reason="Audit qualification probe failed: ${(e.message?:e.toString()).take(240)}"
             withContext(Dispatchers.IO){healthDb.recordQualification(model.id,QUALIFICATION_VERSION,false,reason)}
             AuditModelQualification(model.id,false,reason,model.isFree)
         }
+    }
+
+    private fun transient(model:OpenRouterModel,reason:String):AuditModelQualification{
+        val previous=healthDb.get(model.id)
+        val previouslyReady=previous?.qualificationPassed==true&&previous.qualificationVersion>=QUALIFICATION_VERSION
+        val label=if(previouslyReady)"$reason · previous audit qualification preserved" else reason
+        return AuditModelQualification(model.id,previouslyReady,label,model.isFree,transient=true)
     }
 
     suspend fun qualifyTeam(requestedReviewers:List<String>,requestedFinal:String,catalogue:List<OpenRouterModel>):QualifiedAuditTeam{
@@ -82,6 +96,7 @@ class ModelAuditQualifier(
             if(original!=null){
                 val q=qualify(original);qualifications+=q
                 if(q.ready && (!distinct || requested !in used)){used+=requested;return requested}
+                if(q.transient)return ""
             }
             val candidates=catalogue
                 .filter{it.acceptsText&&it.returnsText&&it.apiId!="openrouter/auto"&&it.apiId!="openrouter/free"}
@@ -91,6 +106,7 @@ class ModelAuditQualifier(
                 if(candidate.id==requested)continue
                 val q=qualify(candidate);qualifications+=q.copy(replacementFor=requested)
                 if(q.ready){replacements+=requested to candidate.id;used+=candidate.id;return candidate.id}
+                if(q.transient)break
             }
             return ""
         }
