@@ -60,6 +60,7 @@ class SecureSettings(context: Context, private val auditMode: Boolean = false) {
     private fun standardCouncilModels(): List<String> = prefs.getStringSet("council_models", null)?.toList()?.sorted().orEmpty()
     private fun standardChairman(): String = prefs.getString("chairman_model", "").orEmpty()
 
+    // No vendor/model is privileged by OmniCouncil. New installs begin unassigned.
     fun councilModels(): List<String> = if (auditMode) {
         (auditReviewerModels() + auditChairman().takeIf { it.isNotBlank() }).filterNotNull().distinct()
     } else standardCouncilModels()

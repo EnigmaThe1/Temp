@@ -39,6 +39,7 @@ jobs:
           cp payload/RepoAuditCheckpointStore.kt /tmp/omnicouncil/app/src/main/java/com/llmcouncil/mobile/data/RepoAuditCheckpointStore.kt
           cp payload/RepoAuditHistoryDb.kt /tmp/omnicouncil/app/src/main/java/com/llmcouncil/mobile/data/RepoAuditHistoryDb.kt
           cp payload/ExportManager.kt /tmp/omnicouncil/app/src/main/java/com/llmcouncil/mobile/data/ExportManager.kt
+          cp payload/ModelHealthDb.kt /tmp/omnicouncil/app/src/main/java/com/llmcouncil/mobile/data/ModelHealthDb.kt
           cp payload/AuditModels.kt /tmp/omnicouncil/app/src/main/java/com/llmcouncil/mobile/model/AuditModels.kt
           cp payload/ScopeValidationEngine.kt /tmp/omnicouncil/app/src/main/java/com/llmcouncil/mobile/domain/ScopeValidationEngine.kt
           cp payload/RepoAuditEngine.kt /tmp/omnicouncil/app/src/main/java/com/llmcouncil/mobile/domain/RepoAuditEngine.kt
@@ -46,11 +47,21 @@ jobs:
           cp payload/AuditStandards.kt /tmp/omnicouncil/app/src/main/java/com/llmcouncil/mobile/domain/AuditStandards.kt
           cp payload/AuditResponseValidator.kt /tmp/omnicouncil/app/src/main/java/com/llmcouncil/mobile/domain/AuditResponseValidator.kt
           cp payload/ModelAuditQualifier.kt /tmp/omnicouncil/app/src/main/java/com/llmcouncil/mobile/domain/ModelAuditQualifier.kt
-      - name: Build unsigned release APK
+      - name: Build installable and release APKs
         working-directory: /tmp/omnicouncil
-        run: gradle --no-daemon :app:assembleRelease
+        run: gradle --no-daemon :app:assembleDebug :app:assembleRelease
+      - name: Verify APK outputs
+        run: |
+          test -s /tmp/omnicouncil/app/build/outputs/apk/debug/app-debug.apk
+          test -s /tmp/omnicouncil/app/build/outputs/apk/release/app-release-unsigned.apk
+          sha256sum /tmp/omnicouncil/app/build/outputs/apk/debug/app-debug.apk /tmp/omnicouncil/app/build/outputs/apk/release/app-release-unsigned.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: OmniCouncil-v6.1-unsigned
+          name: OmniCouncil-v6.1-installable
+          path: /tmp/omnicouncil/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OmniCouncil-v6.1-unsigned-release
           path: /tmp/omnicouncil/app/build/outputs/apk/release/app-release-unsigned.apk
           if-no-files-found: error

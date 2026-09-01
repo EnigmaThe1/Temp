@@ -6,6 +6,7 @@ plugins {
 android {
     namespace 'com.llmcouncil.mobile'
     compileSdk 35
+
     defaultConfig {
         applicationId 'com.llmcouncil.mobile'
         minSdk 26
@@ -13,12 +14,35 @@ android {
         versionCode 18
         versionName '6.1'
     }
-    buildFeatures { compose true; buildConfig true }
-    composeOptions { kotlinCompilerExtensionVersion '1.5.14' }
-    packaging { resources.excludes += '/META-INF/{AL2.0,LGPL2.1}' }
-    buildTypes { release { minifyEnabled false } }
-    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
-    kotlinOptions { jvmTarget = '17'; freeCompilerArgs += ['-opt-in=androidx.compose.material3.ExperimentalMaterial3Api']; freeCompilerArgs += ['-opt-in=androidx.compose.foundation.layout.ExperimentalLayoutApi'] }
+
+    buildFeatures {
+        compose true
+        buildConfig true
+    }
+
+    composeOptions {
+        kotlinCompilerExtensionVersion '1.5.14'
+    }
+
+    packaging {
+        resources.excludes += '/META-INF/{AL2.0,LGPL2.1}'
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = '17'
+        freeCompilerArgs += ['-opt-in=androidx.compose.material3.ExperimentalMaterial3Api']
+        freeCompilerArgs += ['-opt-in=androidx.compose.foundation.layout.ExperimentalLayoutApi']
+    }
 }
 
 dependencies {

@@ -3,7 +3,52 @@ package com.llmcouncil.mobile.domain
 object AuditResponseValidator {
     data class ExpectedUnit(val path:String,val part:Int,val parts:Int) { val key get()="$path|$part/$parts" }
     data class Result(val accepted:Boolean,val covered:Set<String>,val reason:String,val refusal:Boolean=false)
-    private val refusalPatterns=listOf("i cannot fulfill","i can't fulfill","i cannot perform","i can't perform","cannot provide a security audit","cannot conduct a security audit","cannot analyze the specified repository","cannot analyse the specified repository","i can however explain general","i can provide general","general security best practices instead","unable to audit","not able to audit","i must refuse","i'm unable to perform")
-    fun validateBatch(text:String,expected:List<ExpectedUnit>):Result{val clean=text.trim();if(clean.length<120)return Result(false,emptySet(),"response too short to demonstrate repository analysis");val lower=clean.lowercase();val refusal=refusalPatterns.any(lower::contains)||"AUDIT_UNABLE" in clean;if(refusal)return Result(false,emptySet(),"model refused or substituted generic guidance for repository analysis",true);val covered=linkedSetOf<String>();clean.lineSequence().forEach{raw->val line=raw.trim();if(!line.startsWith("COVERAGE|",true))return@forEach;val p=line.split('|',limit=5);if(p.size<5)return@forEach;val path=p[1].trim();val partSpec=p[2].trim();val status=p[3].trim().uppercase();val observation=p[4].trim();val match=expected.firstOrNull{it.path==path&&"${it.part}/${it.parts}"==partSpec}?:return@forEach;if(status!="REVIEWED"||observation.length<18)return@forEach;val generic=observation.lowercase() in setOf("no issues found","looks good","reviewed successfully","reviewed no issues","ok no issues");if(!generic)covered+=match.key};val missing=expected.map{it.key}.filterNot(covered::contains);if(missing.isNotEmpty())return Result(false,covered,"missing valid coverage ledger for ${missing.size}/${expected.size} supplied file parts; examples: ${missing.take(4).joinToString()}");val mentions=expected.map{it.path}.distinct().count{clean.contains(it)};if(mentions==0)return Result(false,covered,"response contains no exact repository path evidence");return Result(true,covered,"repository-grounded evidence accepted")}
-    fun validateSynthesis(text:String,repository:String,evidencePaths:Collection<String>):Result{val clean=text.trim();val lower=clean.lowercase();if(clean.length<180)return Result(false,emptySet(),"synthesis is too short");if(refusalPatterns.any(lower::contains)||"AUDIT_UNABLE" in clean)return Result(false,emptySet(),"model refused repository synthesis or returned generic guidance",true);val candidates=evidencePaths.distinct().take(120);val mentions=candidates.count{clean.contains(it)};val repoMention=clean.contains(repository,true)||clean.contains(repository.substringAfter('/'),true);if(!repoMention&&mentions==0)return Result(false,emptySet(),"synthesis is not demonstrably tied to the audited repository");if(candidates.size>=3&&mentions<2)return Result(false,emptySet(),"synthesis lacks enough concrete file-path evidence");return Result(true,emptySet(),"grounded synthesis accepted")}
+
+    private val refusalPatterns = listOf(
+        "i cannot fulfill", "i can't fulfill", "i cannot perform", "i can't perform",
+        "cannot provide a security audit", "cannot conduct a security audit",
+        "cannot analyze the specified repository", "cannot analyse the specified repository",
+        "i can however explain general", "i can provide general", "general security best practices instead",
+        "unable to audit", "not able to audit", "i must refuse", "i'm unable to perform"
+    )
+
+    fun validateBatch(text:String, expected:List<ExpectedUnit>):Result {
+        val clean=text.trim()
+        if(clean.length<120) return Result(false,emptySet(),"response too short to demonstrate repository analysis")
+        val lower=clean.lowercase()
+        val refusal=refusalPatterns.any(lower::contains)||"AUDIT_UNABLE" in clean
+        if(refusal) return Result(false,emptySet(),"model refused or substituted generic guidance for repository analysis",true)
+
+        val covered=linkedSetOf<String>()
+        clean.lineSequence().forEach { raw ->
+            val line=raw.trim()
+            if(!line.startsWith("COVERAGE|",ignoreCase=true)) return@forEach
+            val p=line.split('|',limit=5)
+            if(p.size<5) return@forEach
+            val path=p[1].trim(); val partSpec=p[2].trim(); val status=p[3].trim().uppercase(); val observation=p[4].trim()
+            val match=expected.firstOrNull{it.path==path&&"${it.part}/${it.parts}"==partSpec} ?: return@forEach
+            if(status!="REVIEWED") return@forEach
+            if(observation.length<18) return@forEach
+            val generic=observation.lowercase() in setOf("no issues found","looks good","reviewed successfully","reviewed no issues","ok no issues")
+            if(!generic) covered+=match.key
+        }
+        val missing=expected.map{it.key}.filterNot(covered::contains)
+        if(missing.isNotEmpty()) return Result(false,covered,"missing valid coverage ledger for ${missing.size}/${expected.size} supplied file parts; examples: ${missing.take(4).joinToString()}")
+
+        val pathMentions=expected.map{it.path}.distinct().count{clean.contains(it)}
+        if(pathMentions==0) return Result(false,covered,"response contains no exact repository path evidence")
+        return Result(true,covered,"repository-grounded evidence accepted")
+    }
+
+    fun validateSynthesis(text:String, repository:String, evidencePaths:Collection<String>):Result {
+        val clean=text.trim(); val lower=clean.lowercase()
+        if(clean.length<180) return Result(false,emptySet(),"synthesis is too short")
+        if(refusalPatterns.any(lower::contains)||"AUDIT_UNABLE" in clean) return Result(false,emptySet(),"model refused repository synthesis or returned generic guidance",true)
+        val candidates=evidencePaths.distinct().take(120)
+        val mentions=candidates.count{clean.contains(it)}
+        val repoMention=clean.contains(repository,true)||clean.contains(repository.substringAfter('/'),true)
+        if(!repoMention&&mentions==0) return Result(false,emptySet(),"synthesis is not demonstrably tied to the audited repository")
+        if(candidates.size>=3&&mentions<2) return Result(false,emptySet(),"synthesis lacks enough concrete file-path evidence")
+        return Result(true,emptySet(),"grounded synthesis accepted")
+    }
 }
