@@ -82,8 +82,9 @@ class OpenRouterClient(private val settings:SecureSettings){
     suspend fun chat(model:String,prompt:String,maxTokens:Int=2048,systemPrompt:String?=null):String=withContext(Dispatchers.IO){
         val source=ModelSource.fromKey(model);val id=ModelSource.apiIdFromKey(model)
         val auditCall=prompt.contains("repository",true)&&listOf("audit","scope","evidence").any{prompt.contains(it,true)}
-        val attempts=if(auditCall)3 else 1;var last:Exception?=null
-        repeat(attempts){attempt->
+        var ordinaryFailures=0
+        var rateLimitStrikes=0
+        while(true){
             try{
                 val text=when(source){
                     ModelSource.OPENROUTER->openRouterChat(id,prompt,maxTokens,systemPrompt)
@@ -92,11 +93,33 @@ class OpenRouterClient(private val settings:SecureSettings){
                     ModelSource.GEMINI->geminiChat(id,prompt,maxTokens,systemPrompt)
                 }.trim()
                 if(!auditCall||isSubstantiveAuditText(text))return@withContext text
-                last=ApiFailure.Unavailable("$model returned an empty or non-substantive repository response")
-            }catch(e:Exception){last=e}
-            if(attempt+1<attempts)delay(750L*(attempt+1))
+                ordinaryFailures++
+                if(ordinaryFailures>=3)throw ApiFailure.Unavailable("$model returned an empty or non-substantive repository response after $ordinaryFailures attempts")
+                delay(750L*ordinaryFailures)
+            }catch(e:ApiFailure.RateLimit){
+                if(!auditCall)throw e
+                val waitMs=rateLimitBackoffMs(e.message.orEmpty(),rateLimitStrikes)
+                rateLimitStrikes++
+                delay(waitMs)
+            }catch(e:ApiFailure.Authentication){throw e}
+            catch(e:ApiFailure.Credits){throw e}
+            catch(e:Exception){
+                if(!auditCall)throw e
+                ordinaryFailures++
+                if(ordinaryFailures>=3)throw e
+                delay(750L*ordinaryFailures)
+            }
         }
-        throw last?:ApiFailure.Unavailable("$model did not return a usable response")
+    }
+
+    private fun rateLimitBackoffMs(message:String,strikes:Int):Long{
+        val match=Regex("retry\\s+in\\s+([0-9.]+)\\s*(ms|s|m)?",RegexOption.IGNORE_CASE).find(message)
+        val suggested=match?.let{m->
+            val value=m.groupValues[1].toDoubleOrNull()?:return@let null
+            when(m.groupValues.getOrNull(2)?.lowercase()){"ms"->value.toLong();"m"->(value*60_000.0).toLong();else->(value*1_000.0).toLong()}
+        }
+        val exponential=(30_000L*(1L shl strikes.coerceAtMost(4))).coerceAtMost(600_000L)
+        return maxOf(suggested?:0L,exponential,30_000L).coerceAtMost(1_800_000L)
     }
 
     private fun isSubstantiveAuditText(text:String)=text.length>=80&&text.lowercase() !in setOf("null","nil","none","n/a","ok")&&text.count{it.isLetter()}>=40
