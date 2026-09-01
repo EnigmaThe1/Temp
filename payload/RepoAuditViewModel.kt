@@ -2,6 +2,7 @@ package com.llmcouncil.mobile
 
 import android.app.Application
 import android.content.Intent
+import android.content.SharedPreferences
 import android.net.Uri
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
@@ -36,12 +37,18 @@ class RepoAuditViewModel(private val app:Application):AndroidViewModel(app){
     private val _scopePreview=MutableStateFlow<AuditScopePreview?>(null);val scopePreview=_scopePreview.asStateFlow()
     private val _preflight=MutableStateFlow<AuditPreflight?>(null);val preflight=_preflight.asStateFlow()
     private val _auditAllocationVersion=MutableStateFlow(0);val auditAllocationVersion=_auditAllocationVersion.asStateFlow()
+    private val _auditReviewers=MutableStateFlow(settings.auditReviewerModels().filter{it.isNotBlank()});val auditReviewers=_auditReviewers.asStateFlow()
+    private val _auditFinalReviewer=MutableStateFlow(settings.auditChairman());val auditFinalReviewer=_auditFinalReviewer.asStateFlow()
     private val _privacyConfirmed=MutableStateFlow(false);val privacyConfirmed=_privacyConfirmed.asStateFlow()
     private var scopeJob:Job?=null
     private var lastTeamReadiness:List<String> = emptyList()
     private var modelLabels:Map<String,String> = emptyMap()
+    private val auditSettingsListener=SharedPreferences.OnSharedPreferenceChangeListener{_,key->
+        if(key in setOf("repo_audit_reviewer_models_v1","repo_audit_chairman_model_v1","council_models","chairman_model"))reloadAuditTeamFromSettings()
+    }
 
-    init{RepoAuditRuntime.initialise(app);CouncilRuntime.initialise(app);loadHistory()}
+    init{settings.registerListener(auditSettingsListener);RepoAuditRuntime.initialise(app);CouncilRuntime.initialise(app);loadHistory()}
+    override fun onCleared(){settings.unregisterListener(auditSettingsListener);super.onCleared()}
 
     fun githubConfigured()=settings.getGitHubToken().isNotBlank()
     fun saveGitHubToken(v:String){settings.setGitHubToken(v.trim());_scopePreview.value=null;_preflight.value=null;if(v.isNotBlank())loadRepos()}
@@ -53,15 +60,26 @@ class RepoAuditViewModel(private val app:Application):AndroidViewModel(app){
     fun deleteHistory(id:Long){viewModelScope.launch{withContext(Dispatchers.IO){historyDb.delete(id)};loadHistory()}}
 
     fun scopeRules(repoFullName:String)=rulesStore.get(repoFullName)
-    fun auditReviewerModels()=settings.auditReviewerModels().filter{it.isNotBlank()}
-    fun auditChairman()=settings.auditChairman()
-    fun refreshAuditAllocation(){_auditAllocationVersion.value++;_preflight.value=_scopePreview.value?.takeIf{it.unresolvedFiles==0}?.let(::buildPreflight);loadHistory()}
-    fun auditAllocationReady():Boolean{val r=auditReviewerModels();return r.size>=2&&r.distinct().size==r.size&&auditChairman().isNotBlank()}
+    fun auditReviewerModels()=_auditReviewers.value
+    fun auditChairman()=_auditFinalReviewer.value
+    fun refreshAuditAllocation(){reloadAuditTeamFromSettings(forceNotify=true);_preflight.value=_scopePreview.value?.takeIf{it.unresolvedFiles==0}?.let(::buildPreflight);loadHistory()}
+    fun auditAllocationReady():Boolean{val r=_auditReviewers.value;return r.size>=2&&r.distinct().size==r.size&&_auditFinalReviewer.value.isNotBlank()}
     fun setPrivacyConfirmed(value:Boolean){_privacyConfirmed.value=value}
     fun modelLabel(id:String):String{if(id.isBlank())return "Not assigned";return modelLabels[id]?:"${ModelSource.apiIdFromKey(id)} · ${ModelSource.fromKey(id).displayName}"}
 
+    private fun reloadAuditTeamFromSettings(forceNotify:Boolean=false){
+        val reviewers=settings.auditReviewerModels().filter{it.isNotBlank()}
+        val finalReviewer=settings.auditChairman().trim()
+        val changed=reviewers!=_auditReviewers.value||finalReviewer!=_auditFinalReviewer.value
+        _auditReviewers.value=reviewers
+        _auditFinalReviewer.value=finalReviewer
+        if(changed||forceNotify)_auditAllocationVersion.value=_auditAllocationVersion.value+1
+        if(changed)_preflight.value=_scopePreview.value?.takeIf{it.unresolvedFiles==0}?.let(::buildPreflight)
+    }
+
     fun prepareScope(repo:GitHubRepo,ref:String,customRules:String){
         if(_loading.value)return
+        reloadAuditTeamFromSettings()
         if(!auditAllocationReady()){_message.value="Configure at least two distinct Reviewers and one Final Reviewer first.";return}
         rulesStore.set(repo.fullName,customRules);_privacyConfirmed.value=false
         scopeJob=viewModelScope.launch{
@@ -89,6 +107,7 @@ class RepoAuditViewModel(private val app:Application):AndroidViewModel(app){
 
     fun start(repo:GitHubRepo,ref:String){
         if(run.value.stage in listOf(RepoAuditStage.SNAPSHOT,RepoAuditStage.INDEPENDENT,RepoAuditStage.PEER_REVIEW,RepoAuditStage.VERIFY,RepoAuditStage.CHAIRMAN))return
+        reloadAuditTeamFromSettings()
         val p=_scopePreview.value
         if(p==null||p.repoFullName!=repo.fullName||p.ref!=ref.ifBlank{repo.defaultBranch}){_message.value="Prepare the automatic audit scope first.";return}
         if(p.unresolvedFiles>0){_message.value="Audit blocked: ${p.unresolvedFiles} scope entries remain unresolved.";return}
@@ -113,6 +132,7 @@ class RepoAuditViewModel(private val app:Application):AndroidViewModel(app){
     }
 
     private suspend fun ensureQualifiedTeam(allowReplacement:Boolean){
+        reloadAuditTeamFromSettings()
         val catalogue=ai.models().filter(::eligibleAuditModel)
         modelLabels=catalogue.associate{it.id to "${it.name} · ${it.source.displayName}"}
         if(catalogue.isEmpty())throw IllegalStateException("No eligible text models are available from configured providers")
@@ -123,7 +143,10 @@ class RepoAuditViewModel(private val app:Application):AndroidViewModel(app){
             throw IllegalStateException("No complete audit-capable team is currently available. ${failed.take(700)}")
         }
         if(!allowReplacement&&qualified.replacements.isNotEmpty())throw IllegalStateException("One or more selected models are unavailable for this audit")
-        if(qualified.reviewers!=requestedReviewers||qualified.finalReviewer!=requestedFinal){settings.setAuditReviewerModels(qualified.reviewers);settings.setAuditChairman(qualified.finalReviewer);_auditAllocationVersion.value++}
+        if(qualified.reviewers!=requestedReviewers||qualified.finalReviewer!=requestedFinal){
+            settings.setAuditReviewerModels(qualified.reviewers);settings.setAuditChairman(qualified.finalReviewer)
+            _auditReviewers.value=qualified.reviewers;_auditFinalReviewer.value=qualified.finalReviewer;_auditAllocationVersion.value=_auditAllocationVersion.value+1
+        }
         val finalIds=(qualified.reviewers+qualified.finalReviewer).distinct()
         lastTeamReadiness=finalIds.map{id->val q=qualified.qualifications.lastOrNull{it.modelId==id&&it.ready};"${if(id==qualified.finalReviewer)"Final Reviewer" else "Reviewer"}: ${modelLabel(id)} — ${q?.reason?:"live qualification passed"}"}
         if(qualified.replacements.isNotEmpty()){
