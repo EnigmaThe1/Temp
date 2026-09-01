@@ -81,7 +81,8 @@ class OpenRouterClient(private val settings:SecureSettings){
 
     suspend fun chat(model:String,prompt:String,maxTokens:Int=2048,systemPrompt:String?=null):String=withContext(Dispatchers.IO){
         val source=ModelSource.fromKey(model);val id=ModelSource.apiIdFromKey(model)
-        val auditCall=prompt.contains("repository",true)&&listOf("audit","scope","evidence").any{prompt.contains(it,true)}
+        val qualificationCall=prompt.contains("synthetic repository fragment",true)||systemPrompt?.contains("being qualified as a software-audit model",true)==true
+        val auditCall=!qualificationCall&&prompt.contains("repository",true)&&listOf("audit","scope","evidence").any{prompt.contains(it,true)}
         var ordinaryFailures=0
         var rateLimitStrikes=0
         while(true){
@@ -92,6 +93,7 @@ class OpenRouterClient(private val settings:SecureSettings){
                     ModelSource.ANTHROPIC->anthropicChat(id,prompt,maxTokens,systemPrompt)
                     ModelSource.GEMINI->geminiChat(id,prompt,maxTokens,systemPrompt)
                 }.trim()
+                if(qualificationCall)return@withContext text
                 if(!auditCall||isSubstantiveAuditText(text))return@withContext text
                 ordinaryFailures++
                 if(ordinaryFailures>=3)throw ApiFailure.Unavailable("$model returned an empty or non-substantive repository response after $ordinaryFailures attempts")
