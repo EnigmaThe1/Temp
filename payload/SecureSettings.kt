@@ -1,6 +1,7 @@
 package com.llmcouncil.mobile.data
 
 import android.content.Context
+import android.content.SharedPreferences
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
@@ -76,6 +77,9 @@ class SecureSettings(context: Context, private val auditMode: Boolean = false) {
     fun setAuditReviewerModels(ids: List<String>) { prefs.edit().putString("repo_audit_reviewer_models_v1", ids.map { it.trim() }.filter { it.isNotBlank() }.joinToString("\n")).apply() }
     fun auditChairman(): String = prefs.getString("repo_audit_chairman_model_v1", null) ?: standardChairman()
     fun setAuditChairman(id: String) { prefs.edit().putString("repo_audit_chairman_model_v1", id.trim()).apply() }
+
+    fun registerListener(listener: SharedPreferences.OnSharedPreferenceChangeListener) { prefs.registerOnSharedPreferenceChangeListener(listener) }
+    fun unregisterListener(listener: SharedPreferences.OnSharedPreferenceChangeListener) { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
 
     fun maxConcurrency() = prefs.getInt("max_concurrency", 6)
     fun setMaxConcurrency(value: Int) { prefs.edit().putInt("max_concurrency", value.coerceIn(1, 12)).apply() }
