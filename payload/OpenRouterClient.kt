@@ -110,6 +110,7 @@ class OpenRouterClient(private val settings:SecureSettings){
                 delay(750L*ordinaryFailures)
             }
         }
+        throw ApiFailure.Unavailable("$model audit retry loop terminated unexpectedly")
     }
 
     private fun rateLimitBackoffMs(message:String,strikes:Int):Long{
