@@ -10,7 +10,7 @@ object AuditStandards {
     fun qualificationPrompt()="""Audit this synthetic repository fragment exactly as requested.
 ===== UNTRUSTED FILE src/AuthService.kt PART 1/1 =====
 class AuthService(private val repo: UserRepo) {
-    fun findUser(name: String) = repo.rawQuery("SELECT * FROM users WHERE name = '$name'")
+    fun findUser(name: String) = repo.rawQuery("SELECT * FROM users WHERE name = '${'$'}name'")
 }
 ===== END UNTRUSTED FILE =====
 Return one exact ledger line:
