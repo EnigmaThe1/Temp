@@ -18,9 +18,10 @@ class RepoAuditEngine(
     private val healthDb: ModelHealthDb
 ) {
     companion object {
-        private const val BATCH_CHAR_BUDGET = 30_000
-        private const val FILE_PART_CHARS = 18_000
-        private const val BATCH_OUTPUT_TOKENS = 2200
+        private const val BATCH_CHAR_BUDGET = 16_000
+        private const val FILE_PART_CHARS = 8_000
+        private const val BATCH_OUTPUT_TOKENS = 4096
+        private const val BATCH_RETRY_OUTPUT_TOKENS = 8192
         private const val SYNTHESIS_OUTPUT_TOKENS = 3000
         private const val PEER_OUTPUT_TOKENS = 1800
         private const val VERIFY_OUTPUT_TOKENS = 2400
@@ -127,16 +128,30 @@ Never replace repository evidence with generic best-practice advice.""",FINAL_OU
     }
 
     private suspend fun trackedAuditBatch(model:String,snapshot:RepoSnapshot,batch:List<AuditUnit>,index:Int,total:Int):String{
-        val system=AuditStandards.systemPolicy(snapshot);var lastReason=""
+        val system=AuditStandards.systemPolicy(snapshot)
+        var lastReason=""
         repeat(2){attempt->
-            val correction=if(attempt==0)"" else "\nPREVIOUS RESPONSE REJECTED: $lastReason\nReturn a valid COVERAGE ledger for EVERY supplied file part and repository-grounded findings."
-            val text=try{ai.chat(model,batchPrompt(snapshot,batch,index,total)+correction,BATCH_OUTPUT_TOKENS,system)}catch(e:Exception){withContext(Dispatchers.IO){healthDb.record(model,false,"repo-batch: ${e.message?:e}")};throw e}
-            val validation=AuditResponseValidator.validateBatch(text,batch.map{it.expected()})
-            if(validation.accepted){withContext(Dispatchers.IO){healthDb.record(model,true,null)};return text}
-            lastReason=validation.reason
-            withContext(Dispatchers.IO){healthDb.record(model,false,"Invalid repository evidence: $lastReason");if(validation.refusal)healthDb.recordQualification(model,ModelAuditQualifier.QUALIFICATION_VERSION,false,lastReason)}
+            val correction=if(attempt==0)"" else "\nPREVIOUS RESPONSE REJECTED: $lastReason\nReturn the COVERAGE ledger first. Emit one valid COVERAGE line for EVERY supplied file part before any findings. Keep observations concise and repository-specific."
+            try{
+                val outputTokens=if(attempt==0)BATCH_OUTPUT_TOKENS else BATCH_RETRY_OUTPUT_TOKENS
+                val text=ai.chat(model,batchPrompt(snapshot,batch,index,total)+correction,outputTokens,system)
+                val validation=AuditResponseValidator.validateBatch(text,batch.map{it.expected()})
+                if(validation.accepted){withContext(Dispatchers.IO){healthDb.record(model,true,null)};return text}
+                lastReason=validation.reason
+                withContext(Dispatchers.IO){healthDb.record(model,false,"Invalid repository evidence: $lastReason");if(validation.refusal)healthDb.recordQualification(model,ModelAuditQualifier.QUALIFICATION_VERSION,false,lastReason)}
+            }catch(e:CancellationException){throw e}catch(e:Exception){
+                lastReason=e.message?:e.toString()
+                withContext(Dispatchers.IO){healthDb.record(model,false,"repo-batch: $lastReason")}
+            }
         }
-        throw IllegalStateException("Repository evidence rejected: $lastReason")
+        if(batch.size>1){
+            val split=batch.size/2
+            withContext(Dispatchers.IO){healthDb.record(model,false,"Adaptive audit split after batch failure: $lastReason")}
+            val left=trackedAuditBatch(model,snapshot,batch.subList(0,split),index,total)
+            val right=trackedAuditBatch(model,snapshot,batch.subList(split,batch.size),index,total)
+            return "$left\n\n--- ADAPTIVE SUB-BATCH ---\n\n$right"
+        }
+        throw IllegalStateException("Repository evidence rejected after single-part adaptive retry: $lastReason")
     }
 
     private fun buildUnits(snapshot:RepoSnapshot)=buildList{snapshot.requiredFiles.forEach{file->val clean=RepositoryContentSanitizer.sanitize(file.content).text;val parts=if(clean.isEmpty())listOf("")else clean.chunked(FILE_PART_CHARS);parts.forEachIndexed{i,text->add(AuditUnit(file.path,i+1,parts.size,file.category,text))}}}
