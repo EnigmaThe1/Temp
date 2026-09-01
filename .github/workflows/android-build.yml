@@ -1,29 +1,19 @@
 name: Disposable Android Build
-
 on:
   push:
-    branches:
-      - 'build/**'
+    branches: ['build/**']
   workflow_dispatch:
-
 permissions:
   contents: read
-
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Temp payload
-        uses: actions/checkout@v4
-      - name: Set up Java 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-      - name: Set up Gradle 8.9
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.9'
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: {distribution: temurin, java-version: '17'}
+      - uses: gradle/actions/setup-gradle@v4
+        with: {gradle-version: '8.9'}
       - name: Prepare disposable OmniCouncil workspace
         run: |
           git clone --depth 1 --branch tmp-omnicouncil-build https://github.com/EnigmaThe1/autonomous-factory-platform.git /tmp/base
@@ -43,6 +33,7 @@ jobs:
           cp payload/GitHubClient.kt /tmp/omnicouncil/app/src/main/java/com/llmcouncil/mobile/data/GitHubClient.kt
           cp payload/GitHubRefsClient.kt /tmp/omnicouncil/app/src/main/java/com/llmcouncil/mobile/data/GitHubRefsClient.kt
           cp payload/OpenRouterClient.kt /tmp/omnicouncil/app/src/main/java/com/llmcouncil/mobile/data/OpenRouterClient.kt
+          cp payload/OkHttpCompat.kt /tmp/omnicouncil/app/src/main/java/com/llmcouncil/mobile/data/OkHttpCompat.kt
           cp payload/AuditScopeRulesStore.kt /tmp/omnicouncil/app/src/main/java/com/llmcouncil/mobile/data/AuditScopeRulesStore.kt
           cp payload/ScopeManifestStore.kt /tmp/omnicouncil/app/src/main/java/com/llmcouncil/mobile/data/ScopeManifestStore.kt
           cp payload/RepoAuditCheckpointStore.kt /tmp/omnicouncil/app/src/main/java/com/llmcouncil/mobile/data/RepoAuditCheckpointStore.kt
@@ -58,8 +49,7 @@ jobs:
       - name: Build unsigned release APK
         working-directory: /tmp/omnicouncil
         run: gradle --no-daemon :app:assembleRelease
-      - name: Upload unsigned APK
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: OmniCouncil-v6.1-unsigned
           path: /tmp/omnicouncil/app/build/outputs/apk/release/app-release-unsigned.apk
