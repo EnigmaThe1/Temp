@@ -36,7 +36,9 @@ endif()
 """
     target_file.write_text(text, encoding="utf-8")
 
-# 2. Qt/Android needs main() exported from the shared library that backs the APK.
+# 2. Qt/Android needs the application entry point exported from the shared
+# library that backs the APK. digiKam 9.1 uses MAIN_EXPORT/MAIN_FN macros
+# rather than spelling the function as a literal int main(...).
 main_file = src / "core" / "app" / "main" / "main.cpp"
 if not main_file.exists():
     candidates = [p for p in src.rglob("main.cpp") if "core/app" in p.as_posix()]
@@ -45,33 +47,63 @@ if not main_file.exists():
     main_file = candidates[0]
 
 main_text = main_file.read_text(encoding="utf-8")
-already_exported = re.search(
-    r"Q_DECL_EXPORT\s*(?:\n\s*)*int\s+main\s*\(",
-    main_text,
-    flags=re.MULTILINE,
-)
-if not already_exported:
-    # Do not depend on column position or line wrapping used by upstream.
-    match = re.search(r"\bint\s+main\s*\(", main_text, flags=re.MULTILINE)
-    if match is None:
+macro_entry = re.search(r"\bMAIN_EXPORT\s+int\s+MAIN_FN\s*\(", main_text)
+
+if macro_entry:
+    # In digiKam 9.1 the non-Windows branch defines MAIN_EXPORT as empty.
+    # For this Android-only patched source tree, make that definition visible
+    # to Qt's Android loader while retaining digiKam's own MAIN_FN abstraction.
+    empty_export = re.compile(
+        r"(?m)^(\s*#\s*define\s+MAIN_EXPORT)\s*$"
+    )
+    main_text, count = empty_export.subn(
+        r"\1 Q_DECL_EXPORT",
+        main_text,
+        count=1,
+    )
+    if count != 1 and "MAIN_EXPORT Q_DECL_EXPORT" not in main_text:
         candidates = [
             f"{i + 1}: {line}"
             for i, line in enumerate(main_text.splitlines())
-            if "main" in line.lower()
+            if "MAIN_EXPORT" in line or "MAIN_FN" in line
         ][:60]
         raise SystemExit(
-            f"Could not locate int main() in {main_file}; main-like lines:\n"
+            f"Could not patch MAIN_EXPORT in {main_file}:\n"
             + "\n".join(candidates)
         )
-
-    export_block = (
-        "#ifdef Q_OS_ANDROID\n"
-        "// DIGIKAM_ANDROID_MAIN_EXPORT\n"
-        "Q_DECL_EXPORT\n"
-        "#endif\n"
-    )
-    main_text = main_text[: match.start()] + export_block + main_text[match.start():]
     main_file.write_text(main_text, encoding="utf-8")
+else:
+    # Compatibility fallback for older/newer upstream layouts using literal main().
+    already_exported = re.search(
+        r"Q_DECL_EXPORT\s*(?:\n\s*)*int\s+main\s*\(",
+        main_text,
+        flags=re.MULTILINE,
+    )
+    if not already_exported:
+        match = re.search(r"\bint\s+main\s*\(", main_text, flags=re.MULTILINE)
+        if match is None:
+            candidates = [
+                f"{i + 1}: {line}"
+                for i, line in enumerate(main_text.splitlines())
+                if "main" in line.lower()
+            ][:60]
+            raise SystemExit(
+                f"Could not locate digiKam entry point in {main_file}; "
+                "main-like lines:\n" + "\n".join(candidates)
+            )
+
+        export_block = (
+            "#ifdef Q_OS_ANDROID\n"
+            "// DIGIKAM_ANDROID_MAIN_EXPORT\n"
+            "Q_DECL_EXPORT\n"
+            "#endif\n"
+        )
+        main_text = (
+            main_text[: match.start()]
+            + export_block
+            + main_text[match.start():]
+        )
+        main_file.write_text(main_text, encoding="utf-8")
 
 # 3. Install Android manifest, splash and icon next to the digiKam target.
 android_dir = target_file.parent / "android"
