@@ -69,8 +69,12 @@ if [[ ! -f "${CRAFT_ROOT}/craft/craftenv.sh" ]]; then
     python3 /tmp/CraftBootstrap.py --prefix "${CRAFT_ROOT}" --branch master --use-defaults 2>&1 | tee "${LOG_ROOT}/craft-bootstrap.log"
 fi
 
+# Craft's environment script intentionally probes variables that can be unset.
+# Disable Bash nounset only for the source operation, then restore strict mode.
 # shellcheck disable=SC1091
+set +u
 source "${CRAFT_ROOT}/craft/craftenv.sh"
+set -u
 
 stage "Refresh Craft blueprints"
 craft -i craft-blueprints-kde 2>&1 | tee "${LOG_ROOT}/craft-blueprints-update.log"
