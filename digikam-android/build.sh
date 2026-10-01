@@ -54,6 +54,11 @@ if [[ -z "${SRC_DIR}" || ! -d "${SRC_DIR}/core" ]]; then
 fi
 echo "Source: ${SRC_DIR}"
 
+# Preserve key upstream files before any downstream patching so failures are inspectable.
+mkdir -p "${OUT_ROOT}/evidence/upstream"
+cp "${SRC_DIR}/core/app/main/main.cpp" "${OUT_ROOT}/evidence/upstream/main.cpp"
+cp "${SRC_DIR}/core/app/DigikamTarget.cmake" "${OUT_ROOT}/evidence/upstream/DigikamTarget.cmake"
+
 stage "Apply Android source compatibility layer"
 python3 /workspace/digikam-android/patch-source.py "${SRC_DIR}" | tee "${LOG_ROOT}/patch-source.log"
 
