@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import os
 import re
 import shutil
 import sys
@@ -46,22 +45,42 @@ if not main_file.exists():
     main_file = candidates[0]
 
 main_text = main_file.read_text(encoding="utf-8")
-if "Q_DECL_EXPORT" not in main_text:
-    main_text, count = re.subn(
-        r"(?m)^int\s+main\s*\(",
-        "#ifdef Q_OS_ANDROID\nQ_DECL_EXPORT\n#endif\nint main(",
-        main_text,
-        count=1,
+already_exported = re.search(
+    r"Q_DECL_EXPORT\s*(?:\n\s*)*int\s+main\s*\(",
+    main_text,
+    flags=re.MULTILINE,
+)
+if not already_exported:
+    # Do not depend on column position or line wrapping used by upstream.
+    match = re.search(r"\bint\s+main\s*\(", main_text, flags=re.MULTILINE)
+    if match is None:
+        candidates = [
+            f"{i + 1}: {line}"
+            for i, line in enumerate(main_text.splitlines())
+            if "main" in line.lower()
+        ][:60]
+        raise SystemExit(
+            f"Could not locate int main() in {main_file}; main-like lines:\n"
+            + "\n".join(candidates)
+        )
+
+    export_block = (
+        "#ifdef Q_OS_ANDROID\n"
+        "// DIGIKAM_ANDROID_MAIN_EXPORT\n"
+        "Q_DECL_EXPORT\n"
+        "#endif\n"
     )
-    if count != 1:
-        raise SystemExit(f"Could not patch main() export in {main_file}")
+    main_text = main_text[: match.start()] + export_block + main_text[match.start():]
     main_file.write_text(main_text, encoding="utf-8")
 
 # 3. Install Android manifest, splash and icon next to the digiKam target.
 android_dir = target_file.parent / "android"
 (android_dir / "res" / "drawable").mkdir(parents=True, exist_ok=True)
 shutil.copy2(android_template / "AndroidManifest.xml", android_dir / "AndroidManifest.xml")
-shutil.copy2(android_template / "res" / "drawable" / "splash.xml", android_dir / "res" / "drawable" / "splash.xml")
+shutil.copy2(
+    android_template / "res" / "drawable" / "splash.xml",
+    android_dir / "res" / "drawable" / "splash.xml",
+)
 
 icon_candidates = [
     src / "core" / "data" / "icons" / "apps" / "128-apps-digikam.png",
