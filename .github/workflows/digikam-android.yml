@@ -1,0 +1,68 @@
+name: digiKam Android Port Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/digikam-android.yml'
+      - 'digikam-android/**'
+
+permissions:
+  contents: read
+
+jobs:
+  android-arm64:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+
+    steps:
+      - name: Checkout build factory
+        uses: actions/checkout@v4
+
+      - name: Reclaim runner disk space
+        shell: bash
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android || true
+          docker system prune -af || true
+          df -h
+
+      - name: Pull KDE Qt 6.11 Android build image
+        run: docker pull invent-registry.kde.org/sysadmin/ci-images/android-qt611:latest
+
+      - name: Build digiKam 9.1.0 Android arm64 APK
+        shell: bash
+        run: |
+          mkdir -p craft-root digikam-android-out
+          set +e
+          docker run --rm \
+            -v "$PWD:/workspace" \
+            -v "$PWD/craft-root:/home/user/CraftRoot" \
+            invent-registry.kde.org/sysadmin/ci-images/android-qt611:latest \
+            bash -lc 'chmod +x /workspace/digikam-android/build.sh && /workspace/digikam-android/build.sh'
+          rc=$?
+          set -e
+          echo "$rc" > digikam-android-out/docker-exit-code.txt
+          exit 0
+
+      - name: Upload APKs and build evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: digikam-9.1.0-android-arm64
+          path: digikam-android-out/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Fail workflow if Android build failed
+        shell: bash
+        run: |
+          rc="$(cat digikam-android-out/docker-exit-code.txt 2>/dev/null || echo 99)"
+          echo "Container build exit code: $rc"
+          if [[ "$rc" != "0" ]]; then
+            echo "digiKam Android build failed; inspect the uploaded logs/evidence artifact."
+            exit "$rc"
+          fi
+          test -f digikam-android-out/build-status.txt
+          grep -qx 'SUCCESS' digikam-android-out/build-status.txt
