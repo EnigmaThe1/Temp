@@ -34,13 +34,14 @@ jobs:
       - name: Build digiKam 9.1.0 Android arm64 APK
         shell: bash
         run: |
-          mkdir -p craft-root digikam-android-out
+          mkdir -p craft-root digikam-android-out .digikam-android-work
+          chmod 0777 craft-root digikam-android-out .digikam-android-work
           set +e
           docker run --rm \
             -v "$PWD:/workspace" \
             -v "$PWD/craft-root:/home/user/CraftRoot" \
             invent-registry.kde.org/sysadmin/ci-images/android-qt611:latest \
-            bash -lc 'chmod +x /workspace/digikam-android/build.sh && /workspace/digikam-android/build.sh'
+            bash -lc 'bash /workspace/digikam-android/build.sh'
           rc=$?
           set -e
           echo "$rc" > digikam-android-out/docker-exit-code.txt
