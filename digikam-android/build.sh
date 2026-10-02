@@ -144,12 +144,20 @@ if [[ -z "${LIBUSB_BP}" ]]; then
 fi
 python3 /workspace/digikam-android/patch-libusb-blueprint.py "${LIBUSB_BP}" | tee "${LOG_ROOT}/patch-libusb-blueprint.log"
 
+LIBUSB_BP="$(find "${CRAFT_ROOT}" -type f -path '*/libs/libusb/libusb.py' -print -quit)"
+if [[ -z "${LIBUSB_BP}" ]]; then
+    echo "Could not locate libusb Craft blueprint" >&2
+    exit 8
+fi
+python3 /workspace/digikam-android/patch-libusb-blueprint.py "${LIBUSB_BP}" | tee "${LOG_ROOT}/patch-libusb-blueprint.log"
+
 # Preserve exactly what was used for this build.
 mkdir -p "${OUT_ROOT}/evidence"
 cp "${DIGIKAM_BP}" "${OUT_ROOT}/evidence/digikam.android.blueprint.py"
 cp "${OPENCV_BP}" "${OUT_ROOT}/evidence/opencv.android.blueprint.py"
 cp "${LIBFFI_BP}" "${OUT_ROOT}/evidence/libffi.android.blueprint.py"
 cp "${LENSFUN_BP}" "${OUT_ROOT}/evidence/lensfun.android.blueprint.py"
+cp "${LIBUSB_BP}" "${OUT_ROOT}/evidence/libusb.android.blueprint.py"
 cp "${LIBUSB_BP}" "${OUT_ROOT}/evidence/libusb.android.blueprint.py"
 cp "${SRC_DIR}/core/app/DigikamTarget.cmake" "${OUT_ROOT}/evidence/DigikamTarget.cmake"
 cp "${SRC_DIR}/core/app/main/main.cpp" "${OUT_ROOT}/evidence/main.cpp"

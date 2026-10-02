@@ -74,6 +74,11 @@ jobs:
           sudo chown -R "$(id -u):$(id -g)" craft-root || true
           sudo chmod -R u+rwX craft-root || true
 
+      - name: Return CraftRoot ownership to runner
+        if: always()
+        shell: bash
+        run: sudo chown -R "$USER":"$(id -gn)" craft-root || true
+
       - name: Save Android Craft progress
         if: always()
         uses: actions/cache/save@v4
