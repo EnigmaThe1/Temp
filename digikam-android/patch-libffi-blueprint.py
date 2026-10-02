@@ -10,6 +10,14 @@ if len(sys.argv) != 2:
 bp = Path(sys.argv[1]).resolve()
 text = bp.read_text(encoding="utf-8")
 
+# The retired qt5-lts blueprint still uses FTP for libffi 3.3. Modern curl
+# runners reject that legacy FTPS path. Keep the exact same Sourceware release
+# and digest, but fetch it over HTTPS.
+text = text.replace(
+    "ftp://sourceware.org/pub/libffi/libffi-{ver}.tar.gz",
+    "https://sourceware.org/pub/libffi/libffi-{ver}.tar.gz",
+)
+
 needle = '''        self.shell.useMSVCCompatEnv = True
 '''
 android = '''        self.shell.useMSVCCompatEnv = True
