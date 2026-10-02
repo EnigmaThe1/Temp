@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Recover retired KDE Qt5 Android definitions
+      - name: Recover complete retired Qt5 Android configuration
         shell: bash
         run: |
           set -euo pipefail
@@ -23,65 +23,67 @@ jobs:
           import json
           import urllib.parse
           import urllib.request
+          from datetime import datetime
 
           BASE = "https://invent.kde.org/api/v4"
+          IMAGE_REF = "4921ba5afefef6e2a10913530061bd221b9b0d0d"
+          CI_REF = "3062b8c90a250369796c9a28a043772a5388dcad"
 
-          def get_json(url):
+          def req(url):
               with urllib.request.urlopen(url, timeout=60) as r:
-                  return json.load(r)
+                  return r.read()
 
-          def get_bytes(url):
-              try:
-                  with urllib.request.urlopen(url, timeout=60) as r:
-                      return r.read()
-              except Exception:
-                  return None
+          def json_req(url):
+              return json.loads(req(url))
 
-          def commits(project, path):
-              p = urllib.parse.quote(project, safe="")
-              q = urllib.parse.urlencode({"path": path, "per_page": 100})
-              return get_json(f"{BASE}/projects/{p}/repository/commits?{q}")
+          def project_id(project):
+              return urllib.parse.quote(project, safe="")
 
-          def raw(project, path, ref):
-              p = urllib.parse.quote(project, safe="")
-              f = urllib.parse.quote(path, safe="")
-              q = urllib.parse.urlencode({"ref": ref})
-              return get_bytes(f"{BASE}/projects/{p}/repository/files/{f}/raw?{q}")
+          def tree(project, path, ref):
+              q=urllib.parse.urlencode({"path":path,"ref":ref,"recursive":"true","per_page":100})
+              return json_req(f"{BASE}/projects/{project_id(project)}/repository/tree?{q}")
 
-          targets = [
-              ("sysadmin/ci-utilities", "gitlab-templates/craft-android-apks.yml"),
-              ("sysadmin/ci-utilities", "gitlab-templates/craft-android-appbundle.yml"),
-              ("sysadmin/ci-images", "android-qt515/Dockerfile"),
-              ("sysadmin/ci-images", "android-qt515/build.sh"),
-              ("sysadmin/ci-images", "android-qt515/setup-environment.sh"),
-              ("sysadmin/ci-images", "android-qt515/setup-sdk-qt.sh"),
-              ("sysadmin/ci-images", "android-qt515/sysprep.sh"),
-          ]
+          def raw(project,path,ref):
+              q=urllib.parse.urlencode({"ref":ref})
+              p=urllib.parse.quote(path,safe="")
+              return req(f"{BASE}/projects/{project_id(project)}/repository/files/{p}/raw?{q}").decode("utf-8",errors="replace")
 
-          for project, path in targets:
-              print("\n" + "="*80)
-              print(project, path)
-              cs = commits(project, path)
-              print("COMMITS:")
-              for c in cs[:20]:
-                  print(c["id"], c.get("created_at"), c.get("title"))
-              found = None
-              for c in cs:
-                  data = raw(project, path, c["id"])
-                  if data:
-                      found = (c, data)
-                      break
-                  for parent in c.get("parent_ids", []):
-                      data = raw(project, path, parent)
-                      if data:
-                          found = ({"id": parent, "title": "parent of " + c.get("title","")}, data)
-                          break
-                  if found:
-                      break
-              if found:
-                  c, data = found
-                  print("RECOVERED_REF:", c["id"], c.get("title"))
-                  print(data.decode("utf-8", errors="replace"))
-              else:
-                  print("NO_HISTORICAL_FILE_RECOVERED")
+          def dump_tree(project,path,ref):
+              print("\nTREE", project, path, ref)
+              xs=tree(project,path,ref)
+              for x in xs:
+                  print(x["type"], x["path"])
+              for x in xs:
+                  if x["type"]=="blob":
+                      print("\n--- FILE",x["path"],"---")
+                      try:
+                          print(raw(project,x["path"],ref))
+                      except Exception as e:
+                          print("FETCH_ERROR",repr(e))
+
+          dump_tree("sysadmin/ci-images","android-qt515",IMAGE_REF)
+          dump_tree("sysadmin/ci-utilities","craft/qt5",CI_REF)
+
+          for extra in [
+              "gitlab-templates/blocks/craft-android-base.yml",
+              "gitlab-templates/craft-android-apks.yml",
+          ]:
+              print("\n--- CI FILE", extra, "---")
+              print(raw("sysadmin/ci-utilities",extra,CI_REF))
+
+          # Resolve a CraftMaster revision that existed when the Qt5 image was retired.
+          p=project_id("packaging/craftmaster")
+          q=urllib.parse.urlencode({"until":"2024-10-21T15:43:06Z","per_page":20})
+          commits=json_req(f"{BASE}/projects/{p}/repository/commits?{q}")
+          print("\nCRAFTMASTER_CANDIDATES")
+          for c in commits:
+              print(c["id"],c["created_at"],c["title"])
+
+          # Same for Craft itself, useful if CraftMaster resolves master dynamically.
+          p=project_id("packaging/craft")
+          q=urllib.parse.urlencode({"until":"2024-10-21T15:43:06Z","per_page":20})
+          commits=json_req(f"{BASE}/projects/{p}/repository/commits?{q}")
+          print("\nCRAFT_CANDIDATES")
+          for c in commits:
+              print(c["id"],c["created_at"],c["title"])
           PY
