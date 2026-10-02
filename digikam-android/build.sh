@@ -88,6 +88,26 @@ set -u
 stage "Refresh Craft blueprints"
 craft -i craft-blueprints-kde 2>&1 | tee "${LOG_ROOT}/craft-blueprints-update.log"
 
+# The Actions cache intentionally preserves Craft's compiled package state.
+# It also preserves our locally modified blueprint working trees, so reset only
+# the files this Android port patches before reapplying those patches. This
+# makes every iteration deterministic without throwing away built dependencies.
+KDE_BP_ROOT="${CRAFT_ROOT}/etc/blueprints/locations/craft-blueprints-kde"
+if [[ ! -d "${KDE_BP_ROOT}/.git" ]]; then
+    echo "Could not locate craft-blueprints-kde Git checkout at ${KDE_BP_ROOT}" >&2
+    exit 9
+fi
+
+git -C "${KDE_BP_ROOT}" checkout -- \
+    extragear/digikam/digikam.py \
+    libs/opencv/opencv/opencv.py \
+    libs/lensfun/lensfun.py \
+    libs/libusb/libusb.py
+
+if [[ -d "${CRAFT_ROOT}/craft/.git" ]]; then
+    git -C "${CRAFT_ROOT}/craft" checkout -- blueprints/libs/libffi/libffi.py
+fi
+
 DIGIKAM_BP="$(find "${CRAFT_ROOT}" -type f -path '*/extragear/digikam/digikam.py' -print -quit)"
 if [[ -z "${DIGIKAM_BP}" ]]; then
     echo "Could not locate digiKam Craft blueprint" >&2
