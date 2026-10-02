@@ -18,10 +18,13 @@ jobs:
       - name: Probe live KDE Qt5 Android image and template
         shell: bash
         run: |
-          set -euxo pipefail
-          echo "=== Qt5 image manifest ==="
-          docker manifest inspect invent-registry.kde.org/sysadmin/ci-images/android-qt515:latest | head -c 4000
-          echo
+          set -uxo pipefail
+          echo "=== Legacy Qt5 image manifest ==="
+          docker manifest inspect invent-registry.kde.org/sysadmin/ci-images/android-qt515:latest             || echo "LEGACY_QT515_IMAGE_MISSING=1"
+
           echo "=== Current KDE Qt5 Android CI template ==="
           curl -fL --retry 4 --retry-all-errors             https://invent.kde.org/sysadmin/ci-utilities/-/raw/master/gitlab-templates/craft-android-apks.yml             -o /tmp/craft-android-apks.yml
           cat /tmp/craft-android-apks.yml
+
+          echo "=== Related Android templates/includes referenced by Qt5 template ==="
+          grep -Eo '/gitlab-templates/[A-Za-z0-9._/-]+\.yml|include:.*|extends:.*|image:.*|ANDROID[^: =]*[:=].*|CRAFT[^: =]*[:=].*'             /tmp/craft-android-apks.yml || true
