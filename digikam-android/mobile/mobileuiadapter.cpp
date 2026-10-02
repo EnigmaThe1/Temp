@@ -153,7 +153,10 @@ MobileUiAdapter::MobileUiAdapter(QMainWindow* window)
 
 void MobileUiAdapter::applyWindowChrome()
 {
+    // Use the complete application surface on phones/tablets while leaving
+    // Android's system navigation/status handling to Qt and the OS.
     m_window->setWindowState(m_window->windowState() | Qt::WindowMaximized);
+    m_window->setMinimumSize(QSize(320, 480));
 
     if (m_window->menuBar())
     {
@@ -239,7 +242,16 @@ void MobileUiAdapter::buildBottomNavigation()
     connect(people, &QAction::triggered,
             this, [this]()
             {
-                activateSidebar(QStringLiteral("People Sidebar"));
+                // The face-management tab has used different object names
+                // across digiKam releases. Prefer a dedicated People tab when
+                // present and fall back to the tags sidebar, which still
+                // exposes face/person tags in the 9.x desktop UI.
+                if (!activateSidebar(QStringLiteral("People Sidebar")) &&
+                    !activateSidebar(QStringLiteral("Face Tags Sidebar")) &&
+                    !activateSidebar(QStringLiteral("Faces Sidebar")))
+                {
+                    activateSidebar(QStringLiteral("TagView Sidebar"));
+                }
             });
 
     connect(search, &QAction::triggered,
