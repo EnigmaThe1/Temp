@@ -64,11 +64,16 @@ jobs:
         run: |
           if [[ ! -f qt5-craft-cache/craft/craftenv.sh ]]; then
             rm -rf qt5-craft-cache
-            mkdir -p qt5-craft-cache
             cid="$(docker create "${TOOLCHAIN_IMAGE}")"
-            docker cp "${cid}:/home/user/android-arm64-clang/." qt5-craft-cache/
+            trap 'docker rm -f "${cid}" >/dev/null 2>&1 || true' EXIT
+            # Copy the Craft root itself to a previously non-existent
+            # destination. This avoids docker-cp's ambiguous src/. semantics.
+            docker cp "${cid}:/home/user/android-arm64-clang" qt5-craft-cache
             docker rm "${cid}"
+            trap - EXIT
           fi
+          echo "Seeded Qt5 Craft root:"
+          ls -la qt5-craft-cache | head -n 40
           sudo chown -R 1000:1000 qt5-craft-cache
           test -f qt5-craft-cache/craft/craftenv.sh
 
