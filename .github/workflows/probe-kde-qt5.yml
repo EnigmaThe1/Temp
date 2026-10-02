@@ -15,47 +15,73 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Inspect KDE CI repository and registry
+      - name: Recover retired KDE Qt5 Android definitions
         shell: bash
         run: |
-          set -uxo pipefail
-
-          echo "=== gitlab-templates repository tree ==="
-          curl -fsSL --retry 4 --retry-all-errors             'https://invent.kde.org/api/v4/projects/sysadmin%2Fci-utilities/repository/tree?path=gitlab-templates&per_page=100'             -o /tmp/templates.json || true
-          cat /tmp/templates.json 2>/dev/null || true
-
-          echo
-          echo "=== Android template names ==="
+          set -euo pipefail
           python3 - <<'PY'
           import json
-          from pathlib import Path
-          p=Path('/tmp/templates.json')
-          if p.exists():
+          import urllib.parse
+          import urllib.request
+
+          BASE = "https://invent.kde.org/api/v4"
+
+          def get_json(url):
+              with urllib.request.urlopen(url, timeout=60) as r:
+                  return json.load(r)
+
+          def get_bytes(url):
               try:
-                  data=json.loads(p.read_text())
-                  for x in data:
-                      if 'android' in x.get('name','').lower() or 'craft' in x.get('name','').lower():
-                          print(x.get('name'), x.get('path'))
-              except Exception as e:
-                  print("TREE_PARSE_ERROR", repr(e))
+                  with urllib.request.urlopen(url, timeout=60) as r:
+                      return r.read()
+              except Exception:
+                  return None
+
+          def commits(project, path):
+              p = urllib.parse.quote(project, safe="")
+              q = urllib.parse.urlencode({"path": path, "per_page": 100})
+              return get_json(f"{BASE}/projects/{p}/repository/commits?{q}")
+
+          def raw(project, path, ref):
+              p = urllib.parse.quote(project, safe="")
+              f = urllib.parse.quote(path, safe="")
+              q = urllib.parse.urlencode({"ref": ref})
+              return get_bytes(f"{BASE}/projects/{p}/repository/files/{f}/raw?{q}")
+
+          targets = [
+              ("sysadmin/ci-utilities", "gitlab-templates/craft-android-apks.yml"),
+              ("sysadmin/ci-utilities", "gitlab-templates/craft-android-appbundle.yml"),
+              ("sysadmin/ci-images", "android-qt515/Dockerfile"),
+              ("sysadmin/ci-images", "android-qt515/build.sh"),
+              ("sysadmin/ci-images", "android-qt515/setup-environment.sh"),
+              ("sysadmin/ci-images", "android-qt515/setup-sdk-qt.sh"),
+              ("sysadmin/ci-images", "android-qt515/sysprep.sh"),
+          ]
+
+          for project, path in targets:
+              print("\n" + "="*80)
+              print(project, path)
+              cs = commits(project, path)
+              print("COMMITS:")
+              for c in cs[:20]:
+                  print(c["id"], c.get("created_at"), c.get("title"))
+              found = None
+              for c in cs:
+                  data = raw(project, path, c["id"])
+                  if data:
+                      found = (c, data)
+                      break
+                  for parent in c.get("parent_ids", []):
+                      data = raw(project, path, parent)
+                      if data:
+                          found = ({"id": parent, "title": "parent of " + c.get("title","")}, data)
+                          break
+                  if found:
+                      break
+              if found:
+                  c, data = found
+                  print("RECOVERED_REF:", c["id"], c.get("title"))
+                  print(data.decode("utf-8", errors="replace"))
+              else:
+                  print("NO_HISTORICAL_FILE_RECOVERED")
           PY
-
-          echo
-          echo "=== ci-utilities project metadata/default branch ==="
-          curl -fsSL             'https://invent.kde.org/api/v4/projects/sysadmin%2Fci-utilities'             -o /tmp/ci-project.json || true
-          cat /tmp/ci-project.json 2>/dev/null || true
-
-          echo
-          echo "=== ci-images project registry repositories ==="
-          curl -fsSL             'https://invent.kde.org/api/v4/projects/sysadmin%2Fci-images/registry/repositories?per_page=100'             -o /tmp/registry.json || true
-          cat /tmp/registry.json 2>/dev/null || true
-
-          echo
-          echo "=== ci-images repository tree: Android references ==="
-          curl -fsSL             'https://invent.kde.org/api/v4/projects/sysadmin%2Fci-images/repository/tree?recursive=true&per_page=100'             -o /tmp/images-tree.json || true
-          cat /tmp/images-tree.json 2>/dev/null || true
-
-          echo
-          echo "=== historical image check ==="
-          docker manifest inspect invent-registry.kde.org/sysadmin/ci-images/android-qt515:latest             >/tmp/qt515-manifest.json 2>/tmp/qt515-error.txt || true
-          cat /tmp/qt515-manifest.json /tmp/qt515-error.txt 2>/dev/null || true
