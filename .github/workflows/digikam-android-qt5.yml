@@ -37,14 +37,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Restore Qt5 Craft progress
-        id: qt5-craft-cache
+      - name: Restore Qt5 toolchain workspace
+        id: qt5-home-cache
         uses: actions/cache/restore@v4
         with:
-          path: qt5-craft-cache
-          key: digikam-android-qt5-craft-v1-${{ runner.os }}-arm64-${{ github.run_id }}
+          path: qt5-home-cache
+          key: digikam-android-qt5-home-v2-${{ runner.os }}-arm64-${{ github.run_id }}
           restore-keys: |
-            digikam-android-qt5-craft-v1-${{ runner.os }}-arm64-
+            digikam-android-qt5-home-v2-${{ runner.os }}-arm64-
 
       - name: Pull pinned Qt5/KF5 Android toolchain
         shell: bash
@@ -62,20 +62,23 @@ jobs:
       - name: Seed Qt5 Craft cache from toolchain image
         shell: bash
         run: |
-          if [[ ! -f qt5-craft-cache/craft/craftenv.sh ]]; then
-            rm -rf qt5-craft-cache
+          if [[ ! -f qt5-home-cache/android-arm64-clang/craft/craftenv.sh ]]; then
+            rm -rf qt5-home-cache
             cid="$(docker create "${TOOLCHAIN_IMAGE}")"
             trap 'docker rm -f "${cid}" >/dev/null 2>&1 || true' EXIT
-            # Copy the Craft root itself to a previously non-existent
-            # destination. This avoids docker-cp's ambiguous src/. semantics.
-            docker cp "${cid}:/home/user/android-arm64-clang" qt5-craft-cache
+            # KDE's retired Craft tree contains absolute symlinks such as
+            # android-arm64-clang/craft -> /home/user/craft-clone. Preserve
+            # the complete home workspace so those links remain valid.
+            docker cp "${cid}:/home/user" qt5-home-cache
             docker rm "${cid}"
             trap - EXIT
           fi
-          echo "Seeded Qt5 Craft root:"
-          ls -la qt5-craft-cache | head -n 40
-          sudo chown -R 1000:1000 qt5-craft-cache
-          test -f qt5-craft-cache/craft/craftenv.sh
+          echo "Seeded Qt5 home workspace:"
+          ls -la qt5-home-cache | head -n 60
+          sudo chown -R 1000:1000 qt5-home-cache
+          test -f qt5-home-cache/craft-clone/craftenv.sh
+          test -L qt5-home-cache/android-arm64-clang/craft
+          test -f qt5-home-cache/android-arm64-clang/etc/CraftSettings.ini || true
 
       - name: Build digiKam 9.1.0 Android arm64 APK
         shell: bash
@@ -88,7 +91,7 @@ jobs:
             -e CRAFT_ROOT=/home/user/android-arm64-clang \
             -e DIGIKAM_SKIP_CRAFT_REFRESH=1 \
             -v "$PWD:/workspace" \
-            -v "$PWD/qt5-craft-cache:/home/user/android-arm64-clang" \
+            -v "$PWD/qt5-home-cache:/home/user" \
             "${TOOLCHAIN_IMAGE}" \
             bash -lc 'bash /workspace/digikam-android/build.sh'
           rc=$?
@@ -106,19 +109,19 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-      - name: Hand Qt5 Craft cache back to runner
+      - name: Hand Qt5 workspace back to runner
         if: always()
         shell: bash
         run: |
-          sudo chown -R "$(id -u):$(id -g)" qt5-craft-cache || true
-          sudo chmod -R u+rwX qt5-craft-cache || true
+          sudo chown -R "$(id -u):$(id -g)" qt5-home-cache || true
+          sudo chmod -R u+rwX qt5-home-cache || true
 
-      - name: Save Qt5 Craft progress
+      - name: Save Qt5 toolchain workspace
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: qt5-craft-cache
-          key: ${{ steps.qt5-craft-cache.outputs.cache-primary-key }}
+          path: qt5-home-cache
+          key: ${{ steps.qt5-home-cache.outputs.cache-primary-key }}
 
       - name: Fail workflow if Android build failed
         shell: bash
