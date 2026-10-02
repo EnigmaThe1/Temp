@@ -29,6 +29,15 @@ jobs:
           docker system prune -af || true
           df -h
 
+      - name: Restore Android Craft progress
+        id: craft-cache-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: craft-root
+          key: digikam-android-craft-${{ runner.os }}-arm64-${{ github.run_id }}
+          restore-keys: |
+            digikam-android-craft-${{ runner.os }}-arm64-
+
       - name: Pull KDE Qt 6.11 Android build image
         run: docker pull invent-registry.kde.org/sysadmin/ci-images/android-qt611:latest
 
@@ -36,6 +45,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p craft-root digikam-android-out .digikam-android-work
+          sudo chown -R 1000:999 craft-root
           chmod 0777 craft-root digikam-android-out .digikam-android-work
           set +e
           docker run --rm \
@@ -56,6 +66,13 @@ jobs:
           path: digikam-android-out/
           if-no-files-found: warn
           retention-days: 7
+
+      - name: Save Android Craft progress
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: craft-root
+          key: ${{ steps.craft-cache-restore.outputs.cache-primary-key }}
 
       - name: Fail workflow if Android build failed
         shell: bash
