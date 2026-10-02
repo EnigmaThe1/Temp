@@ -85,6 +85,18 @@ set +u
 source "${CRAFT_ROOT}/craft/craftenv.sh"
 set -u
 
+stage "Patch retired Craft Android compatibility"
+MESON_BUILD_SYSTEM="$(find "${CRAFT_SEARCH_ROOTS[@]:-${CRAFT_ROOT}}" "${CRAFT_HOME:-$(dirname "${CRAFT_ROOT}")}" \
+    -type f -path '*/bin/BuildSystem/MesonBuildSystem.py' -print -quit 2>/dev/null || true)"
+if [[ -z "${MESON_BUILD_SYSTEM}" ]]; then
+    MESON_BUILD_SYSTEM="$(find "$(dirname "${CRAFT_ROOT}")" -type f -path '*/bin/BuildSystem/MesonBuildSystem.py' -print -quit 2>/dev/null || true)"
+fi
+if [[ -z "${MESON_BUILD_SYSTEM}" ]]; then
+    echo "Could not locate retired Craft MesonBuildSystem.py" >&2
+    exit 11
+fi
+python3 /workspace/digikam-android/patch-craft-meson.py "${MESON_BUILD_SYSTEM}" | tee "${LOG_ROOT}/patch-craft-meson.log"
+
 stage "Prepare Craft blueprints"
 
 # Current Craft keeps blueprints below CRAFT_ROOT. KDE's retired qt5-lts
