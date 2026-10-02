@@ -44,7 +44,14 @@ df -h || true
 stage "Fetch digiKam ${VERSION}"
 rm -rf "${WORK_ROOT}/source"
 mkdir -p "${WORK_ROOT}/source"
-curl -fL --retry 4 --retry-delay 5 "${SOURCE_URL}" -o "${SRC_ARCHIVE}"
+curl -fL \
+    --retry 12 \
+    --retry-all-errors \
+    --retry-delay 3 \
+    --retry-max-time 900 \
+    --connect-timeout 30 \
+    --continue-at - \
+    "${SOURCE_URL}" -o "${SRC_ARCHIVE}"
 tar -xJf "${SRC_ARCHIVE}" -C "${WORK_ROOT}/source"
 SRC_DIR="$(find "${WORK_ROOT}/source" -mindepth 1 -maxdepth 1 -type d | head -n1)"
 if [[ -z "${SRC_DIR}" || ! -d "${SRC_DIR}/core" ]]; then
@@ -65,7 +72,9 @@ python3 /workspace/digikam-android/patch-source.py "${SRC_DIR}" | tee "${LOG_ROO
 stage "Bootstrap KDE Craft for Android"
 if [[ ! -f "${CRAFT_ROOT}/craft/craftenv.sh" ]]; then
     rm -rf "${CRAFT_ROOT:?}"/*
-    curl -fL --retry 4       https://raw.githubusercontent.com/KDE/craft/master/setup/CraftBootstrap.py       -o /tmp/CraftBootstrap.py
+    curl -fL --retry 8 --retry-all-errors --retry-delay 2 \
+      https://raw.githubusercontent.com/KDE/craft/master/setup/CraftBootstrap.py \
+      -o /tmp/CraftBootstrap.py
     python3 /tmp/CraftBootstrap.py --prefix "${CRAFT_ROOT}" --branch master --use-defaults 2>&1 | tee "${LOG_ROOT}/craft-bootstrap.log"
 fi
 
