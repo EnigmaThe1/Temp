@@ -23,10 +23,11 @@ jobs:
       - name: Checkout build factory
         uses: actions/checkout@v4
 
-      - name: Reclaim runner disk space
+      - name: Prepare runner disk space
         shell: bash
         run: |
-          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android || true
+          # The Android SDK/NDK is inside the pinned container; deleting large
+          # host toolchains wastes minutes on every port iteration.
           docker system prune -af || true
           df -h
 

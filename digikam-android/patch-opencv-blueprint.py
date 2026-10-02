@@ -16,18 +16,18 @@ text = bp.read_text(encoding="utf-8")
 
 # Upstream blueprint currently concatenates BUILD_TESTS and BUILD_DOCS into one
 # Python string. Split them so CMake receives two valid options.
-# The retired qt5-lts Craft API represents buildTests as a plain bool rather
-# than a CraftBool with .asOnOff. Normalise the expression before the blueprint
-# class is instantiated.
-text = text.replace(
-    'f"-DBUILD_TESTS={self.subinfo.options.dynamic.buildTests.asOnOff}",',
-    'f"-DBUILD_TESTS={\'ON\' if self.subinfo.options.dynamic.buildTests else \'OFF\'}",',
-)
-
 text = text.replace(
     'f"-DBUILD_TESTS={self.subinfo.options.dynamic.buildTests.asOnOff}" "-DBUILD_DOCS=OFF",',
     'f"-DBUILD_TESTS={self.subinfo.options.dynamic.buildTests.asOnOff}",\n'
     '            "-DBUILD_DOCS=OFF",',
+)
+
+# The retired qt5-lts Craft API represents buildTests as a plain bool rather
+# than a CraftBool with .asOnOff. Do this after splitting the malformed
+# BUILD_TESTS/BUILD_DOCS string above.
+text = text.replace(
+    'f"-DBUILD_TESTS={self.subinfo.options.dynamic.buildTests.asOnOff}",',
+    'f"-DBUILD_TESTS={\'ON\' if self.subinfo.options.dynamic.buildTests else \'OFF\'}",',
 )
 
 # Cross-compiling OpenCV still requires a HOST protoc executable to generate
