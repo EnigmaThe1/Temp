@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 VERSION="${DIGIKAM_VERSION:-9.1.0}"
-CRAFT_ROOT="/home/user/CraftRoot"
+CRAFT_ROOT="${CRAFT_ROOT:-/home/user/CraftRoot}"
 WORK_ROOT="/workspace/.digikam-android-work"
 OUT_ROOT="/workspace/digikam-android-out"
 LOG_ROOT="${OUT_ROOT}/logs"
@@ -85,8 +85,12 @@ set +u
 source "${CRAFT_ROOT}/craft/craftenv.sh"
 set -u
 
-stage "Refresh Craft blueprints"
-craft -i craft-blueprints-kde 2>&1 | tee "${LOG_ROOT}/craft-blueprints-update.log"
+stage "Prepare Craft blueprints"
+if [[ "${DIGIKAM_SKIP_CRAFT_REFRESH:-0}" == "1" ]]; then
+    echo "Using the pinned Craft/blueprint revisions already present in the toolchain image." | tee "${LOG_ROOT}/craft-blueprints-update.log"
+else
+    craft -i craft-blueprints-kde 2>&1 | tee "${LOG_ROOT}/craft-blueprints-update.log"
+fi
 
 # The Actions cache intentionally preserves Craft's compiled package state.
 # It also preserves our locally modified blueprint working trees, so reset only
