@@ -26,14 +26,19 @@ text = text.replace(
 # C++ sources. Craft's Android protobuf package provides an arm64-v8a protoc,
 # which cannot execute on the x86_64 CI host. Use the matching official host
 # protoc while continuing to link Craft's Android protobuf libraries.
-host_root = Path("/workspace/.digikam-android-work/host-protoc")
+# The retired qt5-lts blueprint links protobuf 3.20.3, while current Craft
+# links protobuf 33. Use a matching host protoc to avoid generated-code ABI/API
+# mismatches during cross compilation.
+legacy_qt5 = '"3.20.3"' in text and '"4.10.0"' in text and '"4.12.0"' not in text
+protoc_version = "3.20.3" if legacy_qt5 else "33.0"
+host_root = Path(f"/workspace/.digikam-android-work/host-protoc-{protoc_version}")
 host_protoc = host_root / "bin" / "protoc"
 if not host_protoc.exists():
     host_root.mkdir(parents=True, exist_ok=True)
-    archive = host_root / "protoc-33.0-linux-x86_64.zip"
+    archive = host_root / f"protoc-{protoc_version}-linux-x86_64.zip"
     url = (
         "https://github.com/protocolbuffers/protobuf/releases/download/"
-        "v33.0/protoc-33.0-linux-x86_64.zip"
+        f"v{protoc_version}/protoc-{protoc_version}-linux-x86_64.zip"
     )
     print(f"Downloading host protoc: {url}")
     urllib.request.urlretrieve(url, archive)
@@ -72,7 +77,7 @@ android_block = f'''
 '''
 
 needle = "        if CraftCore.compiler.architecture & CraftCompiler.Architecture.x86:\n"
-if "Protobuf_PROTOC_EXECUTABLE=/workspace/.digikam-android-work/host-protoc/bin/protoc" not in text:
+if "Protobuf_PROTOC_EXECUTABLE=" not in text:
     old_start = text.find("        if CraftCore.compiler.isAndroid:\n")
     old_end = text.find(needle)
     if old_start >= 0 and old_end > old_start:

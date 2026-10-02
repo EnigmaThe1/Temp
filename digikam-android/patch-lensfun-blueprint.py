@@ -10,19 +10,30 @@ if len(sys.argv) != 2:
 bp = Path(sys.argv[1]).resolve()
 text = bp.read_text(encoding="utf-8")
 
-old = (
+modern = (
     "        disableSSE = CraftBool(CraftCore.compiler.isMacOS and "
     "CraftCore.compiler.architecture == CraftCompiler.Architecture.arm64)"
 )
-new = (
+modern_replacement = (
     "        disableSSE = CraftBool(\n"
     "            (CraftCore.compiler.isMacOS or CraftCore.compiler.isAndroid)\n"
     "            and CraftCore.compiler.architecture == CraftCompiler.Architecture.arm64\n"
     "        )"
 )
 
-if old in text:
-    text = text.replace(old, new, 1)
+legacy = (
+    "        disableSSE = CraftCore.compiler.isMacOS and "
+    "CraftCore.compiler.architecture == CraftCompiler.Architecture.arm64"
+)
+legacy_replacement = (
+    "        disableSSE = (CraftCore.compiler.isMacOS or CraftCore.compiler.isAndroid) "
+    "and CraftCore.compiler.architecture == CraftCompiler.Architecture.arm64"
+)
+
+if modern in text:
+    text = text.replace(modern, modern_replacement, 1)
+elif legacy in text:
+    text = text.replace(legacy, legacy_replacement, 1)
 elif "CraftCore.compiler.isAndroid" not in text:
     raise SystemExit("Could not locate Lensfun SSE-selection expression")
 
