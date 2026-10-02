@@ -38,7 +38,17 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Pull pinned Qt5/KF5 Android toolchain
-        run: docker pull "${TOOLCHAIN_IMAGE}"
+        shell: bash
+        run: |
+          for attempt in {1..60}; do
+            if docker pull "${TOOLCHAIN_IMAGE}"; then
+              exit 0
+            fi
+            echo "Qt5 toolchain image not published yet (attempt ${attempt}/60); retrying in 30s..."
+            sleep 30
+          done
+          echo "Pinned Qt5 toolchain image was not available after 30 minutes."
+          exit 1
 
       - name: Build digiKam 9.1.0 Android arm64 APK
         shell: bash
