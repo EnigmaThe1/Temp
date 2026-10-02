@@ -62,7 +62,7 @@ jobs:
       - name: Seed Qt5 Craft cache from toolchain image
         shell: bash
         run: |
-          if [[ ! -f qt5-home-cache/android-arm64-clang/craft/craftenv.sh ]]; then
+          if [[ ! -d qt5-home-cache/android-arm64-clang || ! -d qt5-home-cache/craft-clone || ! -d qt5-home-cache/blueprints ]]; then
             rm -rf qt5-home-cache
             cid="$(docker create "${TOOLCHAIN_IMAGE}")"
             trap 'docker rm -f "${cid}" >/dev/null 2>&1 || true' EXIT
@@ -76,12 +76,18 @@ jobs:
           echo "Seeded Qt5 home workspace:"
           ls -la qt5-home-cache | head -n 60
           sudo chown -R 1000:1000 qt5-home-cache
-          # Absolute Craft symlinks intentionally point at /home/user and are
-          # therefore only resolvable after this workspace is mounted back
-          # into the build container. Validate only the copied roots here.
-          test -d qt5-home-cache/android-arm64-clang
-          test -d qt5-home-cache/craft-clone
-          test -d qt5-home-cache/blueprints
+          # KDE's retired Craft tree uses absolute /home/user symlinks.
+          # Validate those links only in the same container path used by the build.
+          docker run --rm \
+            -v "$PWD/qt5-home-cache:/home/user" \
+            "${TOOLCHAIN_IMAGE}" \
+            bash -lc '
+              set -eux
+              test -d /home/user/android-arm64-clang
+              test -d /home/user/craft-clone
+              test -d /home/user/blueprints
+              test -f /home/user/android-arm64-clang/craft/craftenv.sh
+            '
 
       - name: Build digiKam 9.1.0 Android arm64 APK
         shell: bash

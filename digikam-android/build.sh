@@ -86,6 +86,19 @@ source "${CRAFT_ROOT}/craft/craftenv.sh"
 set -u
 
 stage "Prepare Craft blueprints"
+
+# Current Craft keeps blueprints below CRAFT_ROOT. KDE's retired qt5-lts
+# Android workspace keeps them as siblings under /home/user. Search both
+# layouts so the same port scripts work with the pinned Qt5 toolchain.
+CRAFT_HOME="$(dirname "${CRAFT_ROOT}")"
+CRAFT_SEARCH_ROOTS=("${CRAFT_ROOT}")
+for candidate in "${CRAFT_HOME}/blueprints" "${CRAFT_HOME}/craft-clone"; do
+    if [[ -e "${candidate}" ]]; then
+        CRAFT_SEARCH_ROOTS+=("${candidate}")
+    fi
+done
+echo "Craft search roots: ${CRAFT_SEARCH_ROOTS[*]}"
+
 if [[ "${DIGIKAM_SKIP_CRAFT_REFRESH:-0}" == "1" ]]; then
     echo "Using the pinned Craft/blueprint revisions already present in the toolchain image." | tee "${LOG_ROOT}/craft-blueprints-update.log"
 else
@@ -96,7 +109,7 @@ fi
 # It also preserves our locally modified blueprint working trees, so reset only
 # the files this Android port patches before reapplying those patches. This
 # makes every iteration deterministic without throwing away built dependencies.
-KDE_BP_ROOT="$(find "${CRAFT_ROOT}" -type d -path '*/craft-blueprints-kde/.git' -printf '%h\n' -quit 2>/dev/null || true)"
+KDE_BP_ROOT="$(find "${CRAFT_SEARCH_ROOTS[@]}" -type d -path '*/craft-blueprints-kde/.git' -printf '%h\n' -quit 2>/dev/null || true)"
 if [[ -n "${KDE_BP_ROOT}" && -d "${KDE_BP_ROOT}/.git" ]]; then
     echo "Resetting patched KDE blueprints from: ${KDE_BP_ROOT}"
     for rel in \
@@ -114,47 +127,52 @@ else
     echo "craft-blueprints-kde Git checkout is not exposed in this Craft layout; continuing with idempotent patchers."
 fi
 
-if [[ -d "${CRAFT_ROOT}/craft/.git" && -e "${CRAFT_ROOT}/craft/blueprints/libs/libffi/libffi.py" ]]; then
-    git -C "${CRAFT_ROOT}/craft" checkout -- blueprints/libs/libffi/libffi.py
+LIBFFI_RESET_BP="$(find "${CRAFT_SEARCH_ROOTS[@]}" -type f -path '*/blueprints/libs/libffi/libffi.py' -print -quit 2>/dev/null || true)"
+if [[ -n "${LIBFFI_RESET_BP}" ]]; then
+    LIBFFI_GIT_ROOT="$(git -C "$(dirname "${LIBFFI_RESET_BP}")" rev-parse --show-toplevel 2>/dev/null || true)"
+    if [[ -n "${LIBFFI_GIT_ROOT}" ]]; then
+        LIBFFI_REL="${LIBFFI_RESET_BP#"${LIBFFI_GIT_ROOT}/"}"
+        git -C "${LIBFFI_GIT_ROOT}" checkout -- "${LIBFFI_REL}" || true
+    fi
 fi
 
-DIGIKAM_BP="$(find "${CRAFT_ROOT}" -type f -path '*/extragear/digikam/digikam.py' -print -quit)"
+DIGIKAM_BP="$(find "${CRAFT_SEARCH_ROOTS[@]}" -type f -path '*/extragear/digikam/digikam.py' -print -quit 2>/dev/null || true)"
 if [[ -z "${DIGIKAM_BP}" ]]; then
     echo "Could not locate digiKam Craft blueprint" >&2
-    find "${CRAFT_ROOT}" -maxdepth 6 -type f -name 'digikam.py' -print || true
+    find "${CRAFT_SEARCH_ROOTS[@]}" -maxdepth 8 -type f -name 'digikam.py' -print 2>/dev/null || true
     exit 3
 fi
 python3 /workspace/digikam-android/patch-blueprint.py "${DIGIKAM_BP}" | tee "${LOG_ROOT}/patch-blueprint.log"
 
-OPENCV_BP="$(find "${CRAFT_ROOT}" -type f -path '*/libs/opencv/opencv/opencv.py' -print -quit)"
+OPENCV_BP="$(find "${CRAFT_SEARCH_ROOTS[@]}" -type f -path '*/libs/opencv/opencv/opencv.py' -print -quit 2>/dev/null || true)"
 if [[ -z "${OPENCV_BP}" ]]; then
     echo "Could not locate OpenCV Craft blueprint" >&2
     exit 5
 fi
 python3 /workspace/digikam-android/patch-opencv-blueprint.py "${OPENCV_BP}" | tee "${LOG_ROOT}/patch-opencv-blueprint.log"
 
-LIBFFI_BP="$(find "${CRAFT_ROOT}" -type f -path '*/blueprints/libs/libffi/libffi.py' -print -quit)"
+LIBFFI_BP="$(find "${CRAFT_SEARCH_ROOTS[@]}" -type f -path '*/blueprints/libs/libffi/libffi.py' -print -quit 2>/dev/null || true)"
 if [[ -z "${LIBFFI_BP}" ]]; then
     echo "Could not locate libffi Craft blueprint" >&2
     exit 6
 fi
 python3 /workspace/digikam-android/patch-libffi-blueprint.py "${LIBFFI_BP}" | tee "${LOG_ROOT}/patch-libffi-blueprint.log"
 
-LENSFUN_BP="$(find "${CRAFT_ROOT}" -type f -path '*/libs/lensfun/lensfun.py' -print -quit)"
+LENSFUN_BP="$(find "${CRAFT_SEARCH_ROOTS[@]}" -type f -path '*/libs/lensfun/lensfun.py' -print -quit 2>/dev/null || true)"
 if [[ -z "${LENSFUN_BP}" ]]; then
     echo "Could not locate Lensfun Craft blueprint" >&2
     exit 7
 fi
 python3 /workspace/digikam-android/patch-lensfun-blueprint.py "${LENSFUN_BP}" | tee "${LOG_ROOT}/patch-lensfun-blueprint.log"
 
-LIBUSB_BP="$(find "${CRAFT_ROOT}" -type f -path '*/libs/libusb/libusb.py' -print -quit)"
+LIBUSB_BP="$(find "${CRAFT_SEARCH_ROOTS[@]}" -type f -path '*/libs/libusb/libusb.py' -print -quit 2>/dev/null || true)"
 if [[ -z "${LIBUSB_BP}" ]]; then
     echo "Could not locate libusb Craft blueprint" >&2
     exit 8
 fi
 python3 /workspace/digikam-android/patch-libusb-blueprint.py "${LIBUSB_BP}" | tee "${LOG_ROOT}/patch-libusb-blueprint.log"
 
-MARBLE_BP="$(find "${CRAFT_ROOT}" -type f -path '*/kde/applications/marble/marble.py' -print -quit)"
+MARBLE_BP="$(find "${CRAFT_SEARCH_ROOTS[@]}" -type f -path '*/kde/applications/marble/marble.py' -print -quit 2>/dev/null || true)"
 if [[ -z "${MARBLE_BP}" ]]; then
     echo "Could not locate Marble Craft blueprint" >&2
     exit 10
