@@ -1,3 +1,4 @@
 Pinned Qt5/KF5 Android toolchain build path enabled.
 Qt5 Craft cache seed layout fixed.
 Full Qt5 /home/user workspace cache enabled.
+Container-side absolute Craft link validation enabled.
