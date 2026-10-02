@@ -129,6 +129,7 @@ if [[ -n "${KDE_BP_ROOT}" && -d "${KDE_BP_ROOT}/.git" ]]; then
         libs/opencv/opencv/opencv.py \
         libs/lensfun/lensfun.py \
         libs/libusb/libusb.py \
+        libs/glib/glib.py \
         kde/applications/marble/marble.py
     do
         if [[ -e "${KDE_BP_ROOT}/${rel}" ]]; then
@@ -184,6 +185,13 @@ if [[ -z "${LIBUSB_BP}" ]]; then
 fi
 python3 /workspace/digikam-android/patch-libusb-blueprint.py "${LIBUSB_BP}" | tee "${LOG_ROOT}/patch-libusb-blueprint.log"
 
+GLIB_BP="$(find "${CRAFT_SEARCH_ROOTS[@]}" -type f -path '*/libs/glib/glib.py' -print -quit 2>/dev/null || true)"
+if [[ -z "${GLIB_BP}" ]]; then
+    echo "Could not locate GLib Craft blueprint" >&2
+    exit 12
+fi
+python3 /workspace/digikam-android/patch-glib-blueprint.py "${GLIB_BP}" | tee "${LOG_ROOT}/patch-glib-blueprint.log"
+
 MARBLE_BP="$(find "${CRAFT_SEARCH_ROOTS[@]}" -type f -path '*/kde/applications/marble/marble.py' -print -quit 2>/dev/null || true)"
 if [[ -z "${MARBLE_BP}" ]]; then
     echo "Could not locate Marble Craft blueprint" >&2
@@ -198,12 +206,28 @@ cp "${OPENCV_BP}" "${OUT_ROOT}/evidence/opencv.android.blueprint.py"
 cp "${LIBFFI_BP}" "${OUT_ROOT}/evidence/libffi.android.blueprint.py"
 cp "${LENSFUN_BP}" "${OUT_ROOT}/evidence/lensfun.android.blueprint.py"
 cp "${LIBUSB_BP}" "${OUT_ROOT}/evidence/libusb.android.blueprint.py"
+cp "${GLIB_BP}" "${OUT_ROOT}/evidence/glib.android.blueprint.py"
 cp "${MARBLE_BP}" "${OUT_ROOT}/evidence/marble.android.blueprint.py"
 cp "${SRC_DIR}/core/app/DigikamTarget.cmake" "${OUT_ROOT}/evidence/DigikamTarget.cmake"
 cp "${SRC_DIR}/core/app/main/main.cpp" "${OUT_ROOT}/evidence/main.cpp"
 cp -R "${SRC_DIR}/core/app/android" "${OUT_ROOT}/evidence/android"
 
 CRAFT_OPT="digikam.srcDir=${SRC_DIR}"
+
+stage "Ensure Android iconv/libintl runtime prerequisites"
+if ! compgen -G "${CRAFT_ROOT}/lib/libiconv.*" >/dev/null; then
+    echo "libiconv is missing from the cached Android prefix; rebuilding it."
+    run_logged "00-install-iconv" craft -i libs/iconv
+else
+    echo "libiconv already present in ${CRAFT_ROOT}/lib"
+fi
+
+if ! compgen -G "${CRAFT_ROOT}/lib/libintl.*" >/dev/null; then
+    echo "libintl is missing from the cached Android prefix; building libintl-lite."
+    run_logged "00-install-libintl" craft -i libs/libintl-lite
+else
+    echo "libintl already present in ${CRAFT_ROOT}/lib"
+fi
 
 run_logged "01-install-deps" craft --options "${CRAFT_OPT}" --install-deps digikam
 run_logged "02-configure" craft --options "${CRAFT_OPT}" --configure digikam
