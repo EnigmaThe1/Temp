@@ -29,7 +29,7 @@ text = text.replace(
 # The retired qt5-lts blueprint links protobuf 3.20.3, while current Craft
 # links protobuf 33. Use a matching host protoc to avoid generated-code ABI/API
 # mismatches during cross compilation.
-legacy_qt5 = '"3.20.3"' in text and '"4.10.0"' in text and '"4.12.0"' not in text
+legacy_qt5 = '"4.10.0"' in text and '"4.12.0"' not in text
 protoc_version = "3.20.3" if legacy_qt5 else "33.0"
 host_root = Path(f"/workspace/.digikam-android-work/host-protoc-{protoc_version}")
 host_protoc = host_root / "bin" / "protoc"
