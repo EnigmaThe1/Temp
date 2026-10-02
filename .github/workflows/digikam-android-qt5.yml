@@ -37,6 +37,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Restore Qt5 Craft progress
+        id: qt5-craft-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: qt5-craft-cache
+          key: digikam-android-qt5-craft-v1-${{ runner.os }}-arm64-${{ github.run_id }}
+          restore-keys: |
+            digikam-android-qt5-craft-v1-${{ runner.os }}-arm64-
+
       - name: Pull pinned Qt5/KF5 Android toolchain
         shell: bash
         run: |
@@ -50,6 +59,19 @@ jobs:
           echo "Pinned Qt5 toolchain image was not available after 30 minutes."
           exit 1
 
+      - name: Seed Qt5 Craft cache from toolchain image
+        shell: bash
+        run: |
+          if [[ ! -f qt5-craft-cache/craft/craftenv.sh ]]; then
+            rm -rf qt5-craft-cache
+            mkdir -p qt5-craft-cache
+            cid="$(docker create "${TOOLCHAIN_IMAGE}")"
+            docker cp "${cid}:/home/user/android-arm64-clang/." qt5-craft-cache/
+            docker rm "${cid}"
+          fi
+          sudo chown -R 1000:1000 qt5-craft-cache
+          test -f qt5-craft-cache/craft/craftenv.sh
+
       - name: Build digiKam 9.1.0 Android arm64 APK
         shell: bash
         run: |
@@ -61,6 +83,7 @@ jobs:
             -e CRAFT_ROOT=/home/user/android-arm64-clang \
             -e DIGIKAM_SKIP_CRAFT_REFRESH=1 \
             -v "$PWD:/workspace" \
+            -v "$PWD/qt5-craft-cache:/home/user/android-arm64-clang" \
             "${TOOLCHAIN_IMAGE}" \
             bash -lc 'bash /workspace/digikam-android/build.sh'
           rc=$?
@@ -77,6 +100,20 @@ jobs:
           path: digikam-android-out/
           if-no-files-found: warn
           retention-days: 7
+
+      - name: Hand Qt5 Craft cache back to runner
+        if: always()
+        shell: bash
+        run: |
+          sudo chown -R "$(id -u):$(id -g)" qt5-craft-cache || true
+          sudo chmod -R u+rwX qt5-craft-cache || true
+
+      - name: Save Qt5 Craft progress
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: qt5-craft-cache
+          key: ${{ steps.qt5-craft-cache.outputs.cache-primary-key }}
 
       - name: Fail workflow if Android build failed
         shell: bash
