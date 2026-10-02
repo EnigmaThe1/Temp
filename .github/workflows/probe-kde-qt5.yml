@@ -1,0 +1,27 @@
+name: Probe KDE Qt5 Android Toolchain
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/probe-kde-qt5.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Probe live KDE Qt5 Android image and template
+        shell: bash
+        run: |
+          set -euxo pipefail
+          echo "=== Qt5 image manifest ==="
+          docker manifest inspect invent-registry.kde.org/sysadmin/ci-images/android-qt515:latest | head -c 4000
+          echo
+          echo "=== Current KDE Qt5 Android CI template ==="
+          curl -fL --retry 4 --retry-all-errors             https://invent.kde.org/sysadmin/ci-utilities/-/raw/master/gitlab-templates/craft-android-apks.yml             -o /tmp/craft-android-apks.yml
+          cat /tmp/craft-android-apks.yml
