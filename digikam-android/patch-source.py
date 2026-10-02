@@ -46,6 +46,7 @@ if mobile_sources_marker not in text:
 if(ANDROID)
     target_sources(digikam PRIVATE
         main/mobileuiadapter.cpp
+        main/mobileuiadapter.h
     )
 endif()
 """

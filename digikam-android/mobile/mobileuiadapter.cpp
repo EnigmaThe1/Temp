@@ -5,6 +5,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QDockWidget>
+#include <QDialog>
 #include <QEvent>
 #include <QFont>
 #include <QGuiApplication>
@@ -29,6 +30,37 @@ namespace Digikam
 
 namespace
 {
+
+class MobileApplicationFilter final : public QObject
+{
+public:
+    explicit MobileApplicationFilter(QObject* parent)
+        : QObject(parent)
+    {
+    }
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override
+    {
+        if ((event->type() == QEvent::Show) && watched)
+        {
+            if (QDialog* const dialog = qobject_cast<QDialog*>(watched))
+            {
+                // Desktop configuration/setup dialogs frequently assume a
+                // large resizable window. On a phone/tablet give them the
+                // available application surface instead of letting controls
+                // fall outside the screen.
+                if (dialog->isWindow())
+                {
+                    dialog->setWindowState(
+                        dialog->windowState() | Qt::WindowMaximized);
+                }
+            }
+        }
+
+        return QObject::eventFilter(watched, event);
+    }
+};
 
 QString mobileStyleSheet()
 {
@@ -124,6 +156,10 @@ void MobileUiAdapter::prepareApplication(QApplication* app)
 
     app->setFont(f);
     app->setStyleSheet(app->styleSheet() + mobileStyleSheet());
+
+    // Install before digiKam's first-run assistant is created so initial
+    // collection/database setup is usable on a phone as well.
+    app->installEventFilter(new MobileApplicationFilter(app));
 }
 
 MobileUiAdapter* MobileUiAdapter::install(QMainWindow* window)
