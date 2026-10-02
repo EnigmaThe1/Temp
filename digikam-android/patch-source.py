@@ -12,6 +12,7 @@ if len(sys.argv) != 2:
 src = Path(sys.argv[1]).resolve()
 port_root = Path(__file__).resolve().parent
 android_template = port_root / "android"
+mobile_template = port_root / "mobile"
 
 if not (src / "core").is_dir():
     raise SystemExit(f"Not a digiKam source tree: {src}")
@@ -36,6 +37,20 @@ endif()
 """
     target_file.write_text(text, encoding="utf-8")
 
+# Android builds add a thin adaptive mobile shell while keeping digiKam's
+# existing data/model/image pipeline intact.
+text = target_file.read_text(encoding="utf-8")
+mobile_sources_marker = "main/mobileuiadapter.cpp"
+if mobile_sources_marker not in text:
+    text += """
+if(ANDROID)
+    target_sources(digikam PRIVATE
+        main/mobileuiadapter.cpp
+    )
+endif()
+"""
+    target_file.write_text(text, encoding="utf-8")
+
 # 2. Qt/Android needs the application entry point exported from the shared
 # library that backs the APK. digiKam 9.1 uses MAIN_EXPORT/MAIN_FN macros
 # rather than spelling the function as a literal int main(...).
@@ -47,6 +62,61 @@ if not main_file.exists():
     main_file = candidates[0]
 
 main_text = main_file.read_text(encoding="utf-8")
+
+# Compile-time Android hook for the adaptive mobile shell.
+mobile_include = '#ifdef Q_OS_ANDROID\n#   include "mobileuiadapter.h"\n#endif\n'
+if "mobileuiadapter.h" not in main_text:
+    include_anchor = '#include "digikamapp.h"'
+    if include_anchor not in main_text:
+        raise SystemExit("Could not locate digikamapp.h include for mobile UI hook")
+    main_text = main_text.replace(
+        include_anchor,
+        include_anchor + "\n" + mobile_include,
+        1,
+    )
+
+# Apply mobile sizing to first-run/configuration dialogs immediately after the
+# QApplication exists, before digiKam creates any desktop-oriented dialogs.
+if "MobileUiAdapter::prepareApplication" not in main_text:
+    app_match = re.search(
+        r"(QApplication\s+\w+\s*\(\s*argc\s*,\s*argv\s*\)\s*;)",
+        main_text,
+    )
+    if app_match is None:
+        raise SystemExit("Could not locate QApplication construction for mobile UI hook")
+    app_var_match = re.search(r"QApplication\s+(\w+)\s*\(", app_match.group(1))
+    app_var = app_var_match.group(1)
+    prepare = (
+        app_match.group(1)
+        + "\n\n#ifdef Q_OS_ANDROID\n"
+        + f"    Digikam::MobileUiAdapter::prepareApplication(&{app_var});\n"
+        + "#endif"
+    )
+    main_text = (
+        main_text[:app_match.start()]
+        + prepare
+        + main_text[app_match.end():]
+    )
+
+# Replace the desktop chrome only after the real digiKam window has completed
+# its normal setup. This leaves the core application logic untouched.
+if "MobileUiAdapter::install" not in main_text:
+    show_match = re.search(r"(\b(\w+)\s*->\s*show\s*\(\s*\)\s*;)", main_text)
+    if show_match is None:
+        raise SystemExit("Could not locate digiKam main-window show() call")
+    window_var = show_match.group(2)
+    install = (
+        show_match.group(1)
+        + "\n#ifdef Q_OS_ANDROID\n"
+        + f"    Digikam::MobileUiAdapter::install({window_var});\n"
+        + "#endif"
+    )
+    main_text = (
+        main_text[:show_match.start()]
+        + install
+        + main_text[show_match.end():]
+    )
+
 macro_entry = re.search(r"\bMAIN_EXPORT\s+int\s+MAIN_FN\s*\(", main_text)
 
 if macro_entry:
@@ -105,7 +175,9 @@ else:
         )
         main_file.write_text(main_text, encoding="utf-8")
 
-# 3. Install Android manifest, splash and icon next to the digiKam target.
+main_file.write_text(main_text, encoding="utf-8")
+
+# 3. Install Android manifest, splash, icon, and mobile UI source next to the target.
 android_dir = target_file.parent / "android"
 (android_dir / "res" / "drawable").mkdir(parents=True, exist_ok=True)
 shutil.copy2(android_template / "AndroidManifest.xml", android_dir / "AndroidManifest.xml")
@@ -127,7 +199,15 @@ if icon is None:
     icon = sorted(found, key=lambda p: p.stat().st_size, reverse=True)[0]
 shutil.copy2(icon, android_dir / "res" / "drawable" / "digikam.png")
 
+mobile_dst = target_file.parent / "main"
+for name in ("mobileuiadapter.cpp", "mobileuiadapter.h"):
+    source = mobile_template / name
+    if not source.exists():
+        raise SystemExit(f"Missing Android mobile UI source: {source}")
+    shutil.copy2(source, mobile_dst / name)
+
 print(f"Patched source tree: {src}")
 print(f"  target: {target_file}")
 print(f"  main:   {main_file}")
 print(f"  android:{android_dir}")
+print(f"  mobile: {mobile_dst / 'mobileuiadapter.cpp'}")

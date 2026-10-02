@@ -18,7 +18,11 @@ replacement = '''        self.subinfo.options.configure.args += ["-DBUILD_MARBLE
             # Craft's target protoc is Android/arm64 and cannot execute on the
             # x86_64 CI host. Reuse the host protoc installed for OpenCV.
             self.subinfo.options.configure.args += [
-                "-DProtobuf_PROTOC_EXECUTABLE=/workspace/.digikam-android-work/host-protoc/bin/protoc"
+                "-DProtobuf_PROTOC_EXECUTABLE=/workspace/.digikam-android-work/host-protoc/bin/protoc",
+                # digiKam consumes Marble libraries/plugins, not Marble's own
+                # standalone Android applications. Those app targets still
+                # contain Qt5-era QAndroidJniObject code under Qt 6.
+                "-DBUILD_MARBLE_APPS=OFF",
             ]
 '''
 
