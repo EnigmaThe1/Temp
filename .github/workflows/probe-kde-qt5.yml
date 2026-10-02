@@ -15,16 +15,47 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Probe live KDE Qt5 Android image and template
+      - name: Inspect KDE CI repository and registry
         shell: bash
         run: |
           set -uxo pipefail
-          echo "=== Legacy Qt5 image manifest ==="
-          docker manifest inspect invent-registry.kde.org/sysadmin/ci-images/android-qt515:latest             || echo "LEGACY_QT515_IMAGE_MISSING=1"
 
-          echo "=== Current KDE Qt5 Android CI template ==="
-          curl -fL --retry 4 --retry-all-errors             https://invent.kde.org/sysadmin/ci-utilities/-/raw/master/gitlab-templates/craft-android-apks.yml             -o /tmp/craft-android-apks.yml
-          cat /tmp/craft-android-apks.yml
+          echo "=== gitlab-templates repository tree ==="
+          curl -fsSL --retry 4 --retry-all-errors             'https://invent.kde.org/api/v4/projects/sysadmin%2Fci-utilities/repository/tree?path=gitlab-templates&per_page=100'             -o /tmp/templates.json || true
+          cat /tmp/templates.json 2>/dev/null || true
 
-          echo "=== Related Android templates/includes referenced by Qt5 template ==="
-          grep -Eo '/gitlab-templates/[A-Za-z0-9._/-]+\.yml|include:.*|extends:.*|image:.*|ANDROID[^: =]*[:=].*|CRAFT[^: =]*[:=].*'             /tmp/craft-android-apks.yml || true
+          echo
+          echo "=== Android template names ==="
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path('/tmp/templates.json')
+          if p.exists():
+              try:
+                  data=json.loads(p.read_text())
+                  for x in data:
+                      if 'android' in x.get('name','').lower() or 'craft' in x.get('name','').lower():
+                          print(x.get('name'), x.get('path'))
+              except Exception as e:
+                  print("TREE_PARSE_ERROR", repr(e))
+          PY
+
+          echo
+          echo "=== ci-utilities project metadata/default branch ==="
+          curl -fsSL             'https://invent.kde.org/api/v4/projects/sysadmin%2Fci-utilities'             -o /tmp/ci-project.json || true
+          cat /tmp/ci-project.json 2>/dev/null || true
+
+          echo
+          echo "=== ci-images project registry repositories ==="
+          curl -fsSL             'https://invent.kde.org/api/v4/projects/sysadmin%2Fci-images/registry/repositories?per_page=100'             -o /tmp/registry.json || true
+          cat /tmp/registry.json 2>/dev/null || true
+
+          echo
+          echo "=== ci-images repository tree: Android references ==="
+          curl -fsSL             'https://invent.kde.org/api/v4/projects/sysadmin%2Fci-images/repository/tree?recursive=true&per_page=100'             -o /tmp/images-tree.json || true
+          cat /tmp/images-tree.json 2>/dev/null || true
+
+          echo
+          echo "=== historical image check ==="
+          docker manifest inspect invent-registry.kde.org/sysadmin/ci-images/android-qt515:latest             >/tmp/qt515-manifest.json 2>/tmp/qt515-error.txt || true
+          cat /tmp/qt515-manifest.json /tmp/qt515-error.txt 2>/dev/null || true
