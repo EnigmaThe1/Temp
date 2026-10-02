@@ -15,6 +15,7 @@
 #include <QScreen>
 #include <QScroller>
 #include <QSize>
+#include <QSizePolicy>
 #include <QStatusBar>
 #include <QStyle>
 #include <QToolBar>
@@ -189,7 +190,7 @@ void MobileUiAdapter::applyTouchBehaviour()
         if (area->viewport())
         {
             QScroller::grabGesture(area->viewport(),
-                                   QScroller::LeftMouseButtonGesture);
+                                   QScroller::TouchGesture);
         }
 
         area->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);

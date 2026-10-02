@@ -10,6 +10,7 @@
 
 class QApplication;
 class QMainWindow;
+class QString;
 class QToolBar;
 class QWidget;
 

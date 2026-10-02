@@ -101,10 +101,21 @@ if "MobileUiAdapter::prepareApplication" not in main_text:
 # Replace the desktop chrome only after the real digiKam window has completed
 # its normal setup. This leaves the core application logic untouched.
 if "MobileUiAdapter::install" not in main_text:
-    show_match = re.search(r"(\b(\w+)\s*->\s*show\s*\(\s*\)\s*;)", main_text)
+    app_window_match = re.search(
+        r"DigikamApp\s*\*\s*(?:const\s+)?(\w+)\s*=\s*new\s+DigikamApp\s*\(\s*\)\s*;",
+        main_text,
+    )
+    if app_window_match is None:
+        raise SystemExit("Could not locate the DigikamApp main-window construction")
+    window_var = app_window_match.group(1)
+    show_match = re.search(
+        rf"(\b{re.escape(window_var)}\s*->\s*show\s*\(\s*\)\s*;)",
+        main_text,
+    )
     if show_match is None:
-        raise SystemExit("Could not locate digiKam main-window show() call")
-    window_var = show_match.group(2)
+        raise SystemExit(
+            f"Could not locate {window_var}->show() for mobile UI hook"
+        )
     install = (
         show_match.group(1)
         + "\n#ifdef Q_OS_ANDROID\n"
