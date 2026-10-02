@@ -96,20 +96,25 @@ fi
 # It also preserves our locally modified blueprint working trees, so reset only
 # the files this Android port patches before reapplying those patches. This
 # makes every iteration deterministic without throwing away built dependencies.
-KDE_BP_ROOT="${CRAFT_ROOT}/etc/blueprints/locations/craft-blueprints-kde"
-if [[ ! -d "${KDE_BP_ROOT}/.git" ]]; then
-    echo "Could not locate craft-blueprints-kde Git checkout at ${KDE_BP_ROOT}" >&2
-    exit 9
+KDE_BP_ROOT="$(find "${CRAFT_ROOT}" -type d -path '*/craft-blueprints-kde/.git' -printf '%h\n' -quit 2>/dev/null || true)"
+if [[ -n "${KDE_BP_ROOT}" && -d "${KDE_BP_ROOT}/.git" ]]; then
+    echo "Resetting patched KDE blueprints from: ${KDE_BP_ROOT}"
+    for rel in \
+        extragear/digikam/digikam.py \
+        libs/opencv/opencv/opencv.py \
+        libs/lensfun/lensfun.py \
+        libs/libusb/libusb.py \
+        kde/applications/marble/marble.py
+    do
+        if [[ -e "${KDE_BP_ROOT}/${rel}" ]]; then
+            git -C "${KDE_BP_ROOT}" checkout -- "${rel}"
+        fi
+    done
+else
+    echo "craft-blueprints-kde Git checkout is not exposed in this Craft layout; continuing with idempotent patchers."
 fi
 
-git -C "${KDE_BP_ROOT}" checkout -- \
-    extragear/digikam/digikam.py \
-    libs/opencv/opencv/opencv.py \
-    libs/lensfun/lensfun.py \
-    libs/libusb/libusb.py \
-    kde/applications/marble/marble.py
-
-if [[ -d "${CRAFT_ROOT}/craft/.git" ]]; then
+if [[ -d "${CRAFT_ROOT}/craft/.git" && -e "${CRAFT_ROOT}/craft/blueprints/libs/libffi/libffi.py" ]]; then
     git -C "${CRAFT_ROOT}/craft" checkout -- blueprints/libs/libffi/libffi.py
 fi
 
