@@ -1,0 +1,80 @@
+name: digiKam Android Qt5 Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'digikam-android/**'
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  TOOLCHAIN_IMAGE: ghcr.io/enigmathe1/digikam-android-qt515:qt5.15.5-kf5-arm64
+
+jobs:
+  android-arm64:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+
+    steps:
+      - name: Checkout build factory
+        uses: actions/checkout@v4
+
+      - name: Reclaim runner disk space
+        shell: bash
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android || true
+          docker system prune -af || true
+          df -h
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull pinned Qt5/KF5 Android toolchain
+        run: docker pull "${TOOLCHAIN_IMAGE}"
+
+      - name: Build digiKam 9.1.0 Android arm64 APK
+        shell: bash
+        run: |
+          mkdir -p digikam-android-out .digikam-android-work
+          chmod 0777 digikam-android-out .digikam-android-work
+
+          set +e
+          docker run --rm \
+            -e CRAFT_ROOT=/home/user/android-arm64-clang \
+            -e DIGIKAM_SKIP_CRAFT_REFRESH=1 \
+            -v "$PWD:/workspace" \
+            "${TOOLCHAIN_IMAGE}" \
+            bash -lc 'bash /workspace/digikam-android/build.sh'
+          rc=$?
+          set -e
+
+          echo "$rc" > digikam-android-out/docker-exit-code.txt
+          exit 0
+
+      - name: Upload APKs and build evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: digikam-9.1.0-android-qt5-arm64
+          path: digikam-android-out/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Fail workflow if Android build failed
+        shell: bash
+        run: |
+          rc="$(cat digikam-android-out/docker-exit-code.txt 2>/dev/null || echo 99)"
+          echo "Container build exit code: $rc"
+          if [[ "$rc" != "0" ]]; then
+            exit "$rc"
+          fi
+          test -f digikam-android-out/build-status.txt
+          grep -qx 'SUCCESS' digikam-android-out/build-status.txt
