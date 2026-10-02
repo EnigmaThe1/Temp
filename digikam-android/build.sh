@@ -102,7 +102,8 @@ git -C "${KDE_BP_ROOT}" checkout -- \
     extragear/digikam/digikam.py \
     libs/opencv/opencv/opencv.py \
     libs/lensfun/lensfun.py \
-    libs/libusb/libusb.py
+    libs/libusb/libusb.py \
+    kde/applications/marble/marble.py
 
 if [[ -d "${CRAFT_ROOT}/craft/.git" ]]; then
     git -C "${CRAFT_ROOT}/craft" checkout -- blueprints/libs/libffi/libffi.py
@@ -144,12 +145,12 @@ if [[ -z "${LIBUSB_BP}" ]]; then
 fi
 python3 /workspace/digikam-android/patch-libusb-blueprint.py "${LIBUSB_BP}" | tee "${LOG_ROOT}/patch-libusb-blueprint.log"
 
-LIBUSB_BP="$(find "${CRAFT_ROOT}" -type f -path '*/libs/libusb/libusb.py' -print -quit)"
-if [[ -z "${LIBUSB_BP}" ]]; then
-    echo "Could not locate libusb Craft blueprint" >&2
-    exit 8
+MARBLE_BP="$(find "${CRAFT_ROOT}" -type f -path '*/kde/applications/marble/marble.py' -print -quit)"
+if [[ -z "${MARBLE_BP}" ]]; then
+    echo "Could not locate Marble Craft blueprint" >&2
+    exit 10
 fi
-python3 /workspace/digikam-android/patch-libusb-blueprint.py "${LIBUSB_BP}" | tee "${LOG_ROOT}/patch-libusb-blueprint.log"
+python3 /workspace/digikam-android/patch-marble-blueprint.py "${MARBLE_BP}" | tee "${LOG_ROOT}/patch-marble-blueprint.log"
 
 # Preserve exactly what was used for this build.
 mkdir -p "${OUT_ROOT}/evidence"
@@ -158,7 +159,7 @@ cp "${OPENCV_BP}" "${OUT_ROOT}/evidence/opencv.android.blueprint.py"
 cp "${LIBFFI_BP}" "${OUT_ROOT}/evidence/libffi.android.blueprint.py"
 cp "${LENSFUN_BP}" "${OUT_ROOT}/evidence/lensfun.android.blueprint.py"
 cp "${LIBUSB_BP}" "${OUT_ROOT}/evidence/libusb.android.blueprint.py"
-cp "${LIBUSB_BP}" "${OUT_ROOT}/evidence/libusb.android.blueprint.py"
+cp "${MARBLE_BP}" "${OUT_ROOT}/evidence/marble.android.blueprint.py"
 cp "${SRC_DIR}/core/app/DigikamTarget.cmake" "${OUT_ROOT}/evidence/DigikamTarget.cmake"
 cp "${SRC_DIR}/core/app/main/main.cpp" "${OUT_ROOT}/evidence/main.cpp"
 cp -R "${SRC_DIR}/core/app/android" "${OUT_ROOT}/evidence/android"
