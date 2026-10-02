@@ -1,14 +1,10 @@
-name: digiKam Android Port Build
+name: digiKam Android Port Build (legacy Qt6 diagnostic)
 # Port iteration: 4
 
 on:
+  # Kept only as a historical diagnostic path. digiKam 9.1.0 requires Qt5,
+  # so active Android port builds use digikam-android-qt5.yml.
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - '.github/workflows/digikam-android.yml'
-      - 'digikam-android/**'
 
 permissions:
   contents: read
