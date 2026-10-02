@@ -94,10 +94,18 @@ if [[ -z "${OPENCV_BP}" ]]; then
 fi
 python3 /workspace/digikam-android/patch-opencv-blueprint.py "${OPENCV_BP}" | tee "${LOG_ROOT}/patch-opencv-blueprint.log"
 
+LIBFFI_BP="$(find "${CRAFT_ROOT}" -type f -path '*/blueprints/libs/libffi/libffi.py' -print -quit)"
+if [[ -z "${LIBFFI_BP}" ]]; then
+    echo "Could not locate libffi Craft blueprint" >&2
+    exit 6
+fi
+python3 /workspace/digikam-android/patch-libffi-blueprint.py "${LIBFFI_BP}" | tee "${LOG_ROOT}/patch-libffi-blueprint.log"
+
 # Preserve exactly what was used for this build.
 mkdir -p "${OUT_ROOT}/evidence"
 cp "${DIGIKAM_BP}" "${OUT_ROOT}/evidence/digikam.android.blueprint.py"
 cp "${OPENCV_BP}" "${OUT_ROOT}/evidence/opencv.android.blueprint.py"
+cp "${LIBFFI_BP}" "${OUT_ROOT}/evidence/libffi.android.blueprint.py"
 cp "${SRC_DIR}/core/app/DigikamTarget.cmake" "${OUT_ROOT}/evidence/DigikamTarget.cmake"
 cp "${SRC_DIR}/core/app/main/main.cpp" "${OUT_ROOT}/evidence/main.cpp"
 cp -R "${SRC_DIR}/core/app/android" "${OUT_ROOT}/evidence/android"
