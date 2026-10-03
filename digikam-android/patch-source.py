@@ -240,7 +240,32 @@ if qwebengine_marker not in qt_rules_text:
     )
     qt_rules_file.write_text(qt_rules_text, encoding="utf-8")
 
-# 4. Install Android manifest, splash, icon, and mobile UI source next to the target.
+# 4. FFmpeg is only required by digiKam's optional media player, but the 9.1
+# RulesFFmpeg.cmake split made the REQUIRED probe unconditional. This mirrors
+# the downstream packaging fix used when ENABLE_MEDIAPLAYER is OFF: guard the
+# complete rule file so neither the REQUIRED probe nor its version checks run.
+ffmpeg_rules_file = src / "core" / "cmake" / "rules" / "RulesFFmpeg.cmake"
+if not ffmpeg_rules_file.exists():
+    raise SystemExit(f"Could not locate FFmpeg dependency rules: {ffmpeg_rules_file}")
+
+ffmpeg_rules_text = ffmpeg_rules_file.read_text(encoding="utf-8")
+ffmpeg_marker = "# DIGIKAM_ANDROID_OPTIONAL_FFMPEG"
+
+if ffmpeg_marker not in ffmpeg_rules_text:
+    if "find_package(FFmpeg" not in ffmpeg_rules_text:
+        raise SystemExit(
+            f"Could not locate FFmpeg dependency probe in {ffmpeg_rules_file}"
+        )
+
+    ffmpeg_rules_text = (
+        "if(ENABLE_MEDIAPLAYER)\n"
+        f"    {ffmpeg_marker}\n\n"
+        + ffmpeg_rules_text.rstrip()
+        + "\n\nendif(ENABLE_MEDIAPLAYER)\n"
+    )
+    ffmpeg_rules_file.write_text(ffmpeg_rules_text, encoding="utf-8")
+
+# 5. Install Android manifest, splash, icon, and mobile UI source next to the target.
 android_dir = target_file.parent / "android"
 (android_dir / "res" / "drawable").mkdir(parents=True, exist_ok=True)
 shutil.copy2(android_template / "AndroidManifest.xml", android_dir / "AndroidManifest.xml")
@@ -273,5 +298,6 @@ print(f"Patched source tree: {src}")
 print(f"  target: {target_file}")
 print(f"  main:   {main_file}")
 print(f"  qtrules:{qt_rules_file}")
+print(f"  ffrules:{ffmpeg_rules_file}")
 print(f"  android:{android_dir}")
 print(f"  mobile: {mobile_dst / 'mobileuiadapter.cpp'}")
