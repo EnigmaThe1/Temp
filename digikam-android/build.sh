@@ -485,15 +485,15 @@ else
     echo "PCRE2 already present and complete in ${CRAFT_ROOT}"
 fi
 
-stage "Ensure required Boost.Graph and OpenCV"
+stage "Ensure required Boost headers and OpenCV"
 BOOST_GRAPH_HEADER="${CRAFT_ROOT}/include/boost/graph/adjacency_list.hpp"
 if [[ ! -f "${BOOST_GRAPH_HEADER}" ]]; then
-    echo "Boost.Graph headers are missing from the Android prefix; forcing the pinned Craft package to reinstall."
-    run_logged "00-install-boost-graph" craft -i libs/boost/boost-graph
+    echo "Boost headers are missing from the Android prefix; installing KDE's pinned header-only Boost package."
+    run_logged "00-install-boost-headers" craft -i libs/boost/boost-headers
 fi
 
 if [[ ! -f "${BOOST_GRAPH_HEADER}" ]]; then
-    echo "Boost.Graph reinstall completed but ${BOOST_GRAPH_HEADER} is still missing." >&2
+    echo "Boost header installation completed but ${BOOST_GRAPH_HEADER} is still missing." >&2
     exit 25
 fi
 
@@ -510,7 +510,7 @@ if [[ -z "${OPENCV_CONFIG}" ]]; then
 fi
 
 echo "Required Android dependencies verified:"
-echo "  Boost.Graph: ${BOOST_GRAPH_HEADER}"
+echo "  Boost headers: ${BOOST_GRAPH_HEADER}"
 echo "  OpenCV:      ${OPENCV_CONFIG}"
 
 stage "Clear failed Qt5 unpack state"
