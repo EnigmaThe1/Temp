@@ -288,20 +288,61 @@ fi
 stage "Ensure Android PCRE2 runtime prerequisite"
 if ! compgen -G "${CRAFT_ROOT}/lib/libpcre2-8.*" >/dev/null || \
    [[ ! -f "${CRAFT_ROOT}/lib/pkgconfig/libpcre2-8.pc" ]]; then
-    echo "PCRE2 is missing/incomplete in the cached Android prefix; force-rebuilding it."
-    run_logged "00-install-pcre2" craft -i libs/pcre2
+    echo "PCRE2 is missing/incomplete in the Android prefix; cross-building KDE's pinned PCRE2 10.42."
 
-    if ! compgen -G "${CRAFT_ROOT}/lib/libpcre2-8.*" >/dev/null; then
-        echo "PCRE2 rebuild completed but libpcre2-8 is still missing." >&2
-        find "${CRAFT_ROOT}" -maxdepth 5 -iname '*pcre2*' -print || true
+    PCRE2_VER="10.42"
+    PCRE2_SHA256="c33b418e3b936ee3153de2c61cc638e7e4fe3156022a5c77d0711bcbb9d64f1f"
+    PCRE2_ARCHIVE="${WORK_ROOT}/pcre2-${PCRE2_VER}.tar.gz"
+    PCRE2_SRC="${WORK_ROOT}/pcre2-${PCRE2_VER}"
+    PCRE2_BUILD="${WORK_ROOT}/pcre2-build"
+    PCRE2_URL="https://github.com/PCRE2Project/pcre2/releases/download/pcre2-${PCRE2_VER}/pcre2-${PCRE2_VER}.tar.gz"
+
+    curl -fL --retry 10 --retry-all-errors --retry-delay 2 \
+        "${PCRE2_URL}" -o "${PCRE2_ARCHIVE}"
+    echo "${PCRE2_SHA256}  ${PCRE2_ARCHIVE}" | sha256sum -c -
+
+    rm -rf "${PCRE2_SRC}" "${PCRE2_BUILD}"
+    tar -xzf "${PCRE2_ARCHIVE}" -C "${WORK_ROOT}"
+
+    NDK_ROOT="${ANDROID_NDK:-${ANDROID_NDK_ROOT:-}}"
+    if [[ -z "${NDK_ROOT}" ]]; then
+        echo "ANDROID_NDK/ANDROID_NDK_ROOT is not set" >&2
         exit 15
     fi
 
-    if [[ ! -f "${CRAFT_ROOT}/lib/pkgconfig/libpcre2-8.pc" ]]; then
-        echo "PCRE2 library exists but libpcre2-8.pc is missing; locating metadata." >&2
-        find "${CRAFT_ROOT}" -maxdepth 6 -name 'libpcre2-8.pc' -print || true
+    stage "00-build-pcre2"
+    cmake -S "${PCRE2_SRC}" -B "${PCRE2_BUILD}" -G Ninja \
+        -DCMAKE_TOOLCHAIN_FILE="${NDK_ROOT}/build/cmake/android.toolchain.cmake" \
+        -DANDROID_ABI=arm64-v8a \
+        -DANDROID_PLATFORM=android-21 \
+        -DCMAKE_BUILD_TYPE=MinSizeRel \
+        -DCMAKE_INSTALL_PREFIX="${CRAFT_ROOT}" \
+        -DBUILD_SHARED_LIBS=ON \
+        -DBUILD_STATIC_LIBS=OFF \
+        -DPCRE2_BUILD_PCRE2_8=ON \
+        -DPCRE2_BUILD_PCRE2_16=ON \
+        -DPCRE2_BUILD_PCRE2_32=ON \
+        -DPCRE2_BUILD_PCRE2GREP=OFF \
+        -DPCRE2_BUILD_TESTS=OFF \
+        -DPCRE2_SUPPORT_LIBBZ2=OFF \
+        -DPCRE2_SUPPORT_LIBZ=OFF
+    cmake --build "${PCRE2_BUILD}" --parallel 2
+    cmake --install "${PCRE2_BUILD}"
+
+    if ! compgen -G "${CRAFT_ROOT}/lib/libpcre2-8.*" >/dev/null; then
+        echo "PCRE2 direct build completed but libpcre2-8 is still missing." >&2
+        find "${CRAFT_ROOT}" -maxdepth 5 -iname '*pcre2*' -print || true
         exit 16
     fi
+
+    if [[ ! -f "${CRAFT_ROOT}/lib/pkgconfig/libpcre2-8.pc" ]]; then
+        echo "PCRE2 library exists but libpcre2-8.pc is missing." >&2
+        find "${CRAFT_ROOT}" -maxdepth 6 -name 'libpcre2-8.pc' -print || true
+        exit 17
+    fi
+
+    echo "Installed Android PCRE2:"
+    ls -l "${CRAFT_ROOT}"/lib/libpcre2-* "${CRAFT_ROOT}"/lib/pkgconfig/libpcre2-8.pc || true
 else
     echo "PCRE2 already present and complete in ${CRAFT_ROOT}"
 fi
