@@ -303,32 +303,71 @@ if [[ ! -f "${LIBINTL_HEADER}" || ! -f "${LIBINTL_ARCHIVE}" ]]; then
     exit 19
 fi
 
-if ! grep -q 'dcgettext' "${LIBINTL_HEADER}"; then
-    python3 - "${LIBINTL_HEADER}" <<'PY'
+python3 - "${LIBINTL_HEADER}" <<'PY'
 from pathlib import Path
 import sys
 
 p = Path(sys.argv[1])
 text = p.read_text(encoding="utf-8")
-anchor = "LIBINTL_LITE_API const char* dgettext(const char* domain, const char* origStr);\n"
-addition = """LIBINTL_LITE_API const char* dgettext(const char* domain, const char* origStr);
-LIBINTL_LITE_API const char* dcgettext(const char* domain, const char* origStr, int category);
-"""
-if anchor not in text:
-    raise SystemExit("Could not locate dgettext declaration in libintl-lite header")
-text = text.replace(anchor, addition, 1)
 
-anchor2 = "LIBINTL_LITE_API const char* dngettext(const char* domain, const char* origStr, const char* origStrPlural, unsigned long n);\n"
-addition2 = """LIBINTL_LITE_API const char* dngettext(const char* domain, const char* origStr, const char* origStrPlural, unsigned long n);
-LIBINTL_LITE_API const char* dcngettext(const char* domain, const char* origStr, const char* origStrPlural, unsigned long n, int category);
+# libintl-lite intentionally implements a small gettext subset. GLib expects
+# the GNU gettext API surface and compiler format-argument annotations.
+# Add only the missing compatibility declarations/metadata, idempotently.
+if "LIBINTL_LITE_FORMAT_ARG" not in text:
+    marker = "#ifdef __cplusplus\n"
+    compat_macro = """#if defined(__GNUC__) || defined(__clang__)
+#  define LIBINTL_LITE_FORMAT_ARG(n) __attribute__((format_arg(n)))
+#else
+#  define LIBINTL_LITE_FORMAT_ARG(n)
+#endif
+
 """
-if anchor2 not in text:
-    raise SystemExit("Could not locate dngettext declaration in libintl-lite header")
-text = text.replace(anchor2, addition2, 1)
+    if marker not in text:
+        raise SystemExit("Could not locate C++ linkage marker in libintl-lite header")
+    text = text.replace(marker, compat_macro + marker, 1)
+
+decl_replacements = {
+    "LIBINTL_LITE_API const char* gettext(const char* origStr);":
+        "LIBINTL_LITE_API const char* gettext(const char* origStr) LIBINTL_LITE_FORMAT_ARG(1);",
+    "LIBINTL_LITE_API const char* dgettext(const char* domain, const char* origStr);":
+        "LIBINTL_LITE_API const char* dgettext(const char* domain, const char* origStr) LIBINTL_LITE_FORMAT_ARG(2);",
+}
+
+for old, new in decl_replacements.items():
+    if new not in text:
+        if old not in text:
+            raise SystemExit(f"Could not locate libintl-lite declaration: {old}")
+        text = text.replace(old, new, 1)
+
+if "const char* dcgettext(" not in text:
+    anchor = "LIBINTL_LITE_API const char* dgettext(const char* domain, const char* origStr) LIBINTL_LITE_FORMAT_ARG(2);\n"
+    addition = anchor + "LIBINTL_LITE_API const char* dcgettext(const char* domain, const char* origStr, int category) LIBINTL_LITE_FORMAT_ARG(2);\n"
+    if anchor not in text:
+        raise SystemExit("Could not locate annotated dgettext declaration")
+    text = text.replace(anchor, addition, 1)
+elif "dcgettext(const char* domain, const char* origStr, int category) LIBINTL_LITE_FORMAT_ARG(2)" not in text:
+    old = "LIBINTL_LITE_API const char* dcgettext(const char* domain, const char* origStr, int category);"
+    new = "LIBINTL_LITE_API const char* dcgettext(const char* domain, const char* origStr, int category) LIBINTL_LITE_FORMAT_ARG(2);"
+    if old not in text:
+        raise SystemExit("Could not annotate existing dcgettext declaration")
+    text = text.replace(old, new, 1)
+
+if "const char* dcngettext(" not in text:
+    anchor = "LIBINTL_LITE_API const char* dngettext(const char* domain, const char* origStr, const char* origStrPlural, unsigned long n);\n"
+    addition = anchor + "LIBINTL_LITE_API const char* dcngettext(const char* domain, const char* origStr, const char* origStrPlural, unsigned long n, int category);\n"
+    if anchor not in text:
+        raise SystemExit("Could not locate dngettext declaration")
+    text = text.replace(anchor, addition, 1)
+
+# This is a C declaration, not an old-style unspecified-arguments function.
+text = text.replace(
+    "LIBINTL_LITE_API void closeAllLoadedMessageCatalogs();",
+    "LIBINTL_LITE_API void closeAllLoadedMessageCatalogs(void);",
+)
+
 p.write_text(text, encoding="utf-8")
-print("Added GNU dcgettext/dcngettext declarations to:", p)
+print("Ensured GNU gettext declarations and format_arg annotations in:", p)
 PY
-fi
 
 if ! "${NDK_BIN}/llvm-nm" "${LIBINTL_ARCHIVE}" 2>/dev/null | grep -q ' T dcgettext$'; then
     INTL_COMPAT_C="${WORK_ROOT}/libintl-lite-gnu-compat.c"
