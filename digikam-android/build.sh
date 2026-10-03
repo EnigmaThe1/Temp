@@ -216,49 +216,64 @@ CRAFT_OPT="digikam.srcDir=${SRC_DIR}"
 
 stage "Ensure Android iconv/libintl runtime prerequisites"
 if ! compgen -G "${CRAFT_ROOT}/lib/libiconv.*" >/dev/null; then
-    echo "libiconv is missing from the cached Android prefix; enabling only its retired Unix recipe temporarily."
+    echo "libiconv is missing from the Android prefix; cross-building KDE's pinned GNU libiconv 1.15."
 
-    UNIX_LIBS_INFO="$(find "${CRAFT_SEARCH_ROOTS[@]}" -type f -path '*/blueprints/libs/_unix/info.ini' -print -quit 2>/dev/null || true)"
-    if [[ -z "${UNIX_LIBS_INFO}" ]]; then
-        echo "Could not locate retired Craft libs/_unix/info.ini for libiconv" >&2
+    ICONV_VER="1.15"
+    ICONV_SHA256="ccf536620a45458d26ba83887a983b96827001e92a13847b45e4925cc8913178"
+    ICONV_ARCHIVE="${WORK_ROOT}/libiconv-${ICONV_VER}.tar.gz"
+    ICONV_SRC="${WORK_ROOT}/libiconv-${ICONV_VER}"
+    ICONV_URL="https://ftp.gnu.org/pub/gnu/libiconv/libiconv-${ICONV_VER}.tar.gz"
+
+    curl -fL --retry 10 --retry-all-errors --retry-delay 2 \
+        "${ICONV_URL}" -o "${ICONV_ARCHIVE}"
+    echo "${ICONV_SHA256}  ${ICONV_ARCHIVE}" | sha256sum -c -
+
+    rm -rf "${ICONV_SRC}"
+    tar -xzf "${ICONV_ARCHIVE}" -C "${WORK_ROOT}"
+
+    NDK_ROOT="${ANDROID_NDK:-${ANDROID_NDK_ROOT:-}}"
+    if [[ -z "${NDK_ROOT}" ]]; then
+        echo "ANDROID_NDK/ANDROID_NDK_ROOT is not set" >&2
         exit 13
     fi
 
-    UNIX_LIBS_INFO_BACKUP="${WORK_ROOT}/unix-libs-info.ini.orig"
-    cp "${UNIX_LIBS_INFO}" "${UNIX_LIBS_INFO_BACKUP}"
+    NDK_HOST="${ANDROID_NDK_HOST:-linux-x86_64}"
+    NDK_BIN="${NDK_ROOT}/toolchains/llvm/prebuilt/${NDK_HOST}/bin"
+    API_LEVEL="${ANDROID_API_LEVEL:-21}"
 
-    python3 - "${UNIX_LIBS_INFO}" <<'PY'
-from pathlib import Path
-import sys
+    stage "00-build-iconv"
+    (
+        cd "${ICONV_SRC}"
+        export CC="${NDK_BIN}/aarch64-linux-android${API_LEVEL}-clang"
+        export CXX="${NDK_BIN}/aarch64-linux-android${API_LEVEL}-clang++"
+        export AR="${NDK_BIN}/llvm-ar"
+        export RANLIB="${NDK_BIN}/llvm-ranlib"
+        export STRIP="${NDK_BIN}/llvm-strip"
+        export LD="${NDK_BIN}/ld.lld"
 
-p = Path(sys.argv[1])
-text = p.read_text(encoding="utf-8")
-old = "platforms = macos;linux;freebsd"
-if old in text:
-    text = text.replace(old, old + ";android", 1)
-elif "android" not in text.lower():
-    raise SystemExit("Unexpected retired _unix category metadata: " + text)
-p.write_text(text, encoding="utf-8")
-print("Temporarily enabled Android for retired libs/_unix category:", p)
-PY
-
-    set +e
-    run_logged "00-install-iconv" craft -i libs/iconv
-    ICONV_RC=$?
-    set -e
-
-    cp "${UNIX_LIBS_INFO_BACKUP}" "${UNIX_LIBS_INFO}"
-    rm -f "${UNIX_LIBS_INFO_BACKUP}"
+        ./configure \
+            --host=aarch64-linux-android \
+            --prefix="${CRAFT_ROOT}" \
+            --disable-static \
+            --enable-shared
+        make -j2
+        make install
+    ) 2>&1 | tee "${LOG_ROOT}/00-build-iconv.log"
+    ICONV_RC=${PIPESTATUS[0]}
 
     if [[ ${ICONV_RC} -ne 0 ]]; then
+        echo "Direct Android libiconv build failed." >&2
         exit "${ICONV_RC}"
     fi
 
     if ! compgen -G "${CRAFT_ROOT}/lib/libiconv.*" >/dev/null; then
-        echo "Craft reported libiconv success but no linkable libiconv was installed." >&2
+        echo "libiconv build completed but no linkable library was installed." >&2
         find "${CRAFT_ROOT}" -maxdepth 4 \( -name 'libiconv*' -o -name 'iconv.h' \) -print || true
         exit 14
     fi
+
+    echo "Installed Android libiconv:"
+    ls -l "${CRAFT_ROOT}"/lib/libiconv.* "${CRAFT_ROOT}"/include/iconv.h || true
 else
     echo "libiconv already present in ${CRAFT_ROOT}/lib"
 fi
