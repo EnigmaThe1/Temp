@@ -288,9 +288,19 @@ fi
 stage "Ensure Android libintl-lite GNU API compatibility"
 LIBINTL_HEADER="${CRAFT_ROOT}/include/libintl.h"
 LIBINTL_ARCHIVE="${CRAFT_ROOT}/lib/libintl.a"
+NDK_ROOT="${ANDROID_NDK:-${ANDROID_NDK_ROOT:-}}"
+NDK_HOST="${ANDROID_NDK_HOST:-linux-x86_64}"
+NDK_BIN="${NDK_ROOT}/toolchains/llvm/prebuilt/${NDK_HOST}/bin"
+API_LEVEL="${ANDROID_API_LEVEL:-21}"
+
+if [[ -z "${NDK_ROOT}" || ! -x "${NDK_BIN}/llvm-nm" ]]; then
+    echo "Android NDK tools are unavailable for libintl compatibility shim." >&2
+    exit 18
+fi
+
 if [[ ! -f "${LIBINTL_HEADER}" || ! -f "${LIBINTL_ARCHIVE}" ]]; then
     echo "Expected libintl-lite header/archive are missing after installation." >&2
-    exit 18
+    exit 19
 fi
 
 if ! grep -q 'dcgettext' "${LIBINTL_HEADER}"; then
@@ -320,7 +330,7 @@ print("Added GNU dcgettext/dcngettext declarations to:", p)
 PY
 fi
 
-if ! "${NDK_BIN:-${ANDROID_NDK:-${ANDROID_NDK_ROOT:-}}/toolchains/llvm/prebuilt/linux-x86_64/bin}/llvm-nm"         "${LIBINTL_ARCHIVE}" 2>/dev/null | grep -q ' T dcgettextif ! compgen -G "${CRAFT_ROOT}/lib/libpcre2-8.*" >/dev/null || \
+if ! "${NDK_BIN}/llvm-nm" "${LIBINTL_ARCHIVE}" 2>/dev/null | grep -q ' T dcgettextif ! compgen -G "${CRAFT_ROOT}/lib/libpcre2-8.*" >/dev/null || \
    [[ ! -f "${CRAFT_ROOT}/lib/pkgconfig/libpcre2-8.pc" ]]; then
     echo "PCRE2 is missing/incomplete in the Android prefix; cross-building KDE's pinned PCRE2 10.42."
 
@@ -442,10 +452,6 @@ echo "SUCCESS" | tee "${OUT_ROOT}/build-status.txt"
 stage "Done"
 find "${OUT_ROOT}" -maxdepth 3 -type f -printf '%p %k KB\n' | sort
 ; then
-    NDK_ROOT="${ANDROID_NDK:-${ANDROID_NDK_ROOT:-}}"
-    NDK_HOST="${ANDROID_NDK_HOST:-linux-x86_64}"
-    NDK_BIN="${NDK_ROOT}/toolchains/llvm/prebuilt/${NDK_HOST}/bin"
-    API_LEVEL="${ANDROID_API_LEVEL:-21}"
     INTL_COMPAT_C="${WORK_ROOT}/libintl-lite-gnu-compat.c"
     INTL_COMPAT_O="${WORK_ROOT}/libintl-lite-gnu-compat.o"
 
@@ -469,12 +475,14 @@ const char* dcngettext(const char* domain,
 }
 C
 
-    "${NDK_BIN}/aarch64-linux-android${API_LEVEL}-clang"         -I"${CRAFT_ROOT}/include"         -c "${INTL_COMPAT_C}" -o "${INTL_COMPAT_O}"
+    "${NDK_BIN}/aarch64-linux-android${API_LEVEL}-clang" \
+        -I"${CRAFT_ROOT}/include" \
+        -c "${INTL_COMPAT_C}" -o "${INTL_COMPAT_O}"
     "${NDK_BIN}/llvm-ar" r "${LIBINTL_ARCHIVE}" "${INTL_COMPAT_O}"
     "${NDK_BIN}/llvm-ranlib" "${LIBINTL_ARCHIVE}"
 fi
 
-if ! "${NDK_BIN:-${ANDROID_NDK:-${ANDROID_NDK_ROOT:-}}/toolchains/llvm/prebuilt/linux-x86_64/bin}/llvm-nm"         "${LIBINTL_ARCHIVE}" 2>/dev/null | grep -q ' T dcgettextif ! compgen -G "${CRAFT_ROOT}/lib/libpcre2-8.*" >/dev/null || \
+if ! "${NDK_BIN}/llvm-nm" "${LIBINTL_ARCHIVE}" 2>/dev/null | grep -q ' T dcgettextif ! compgen -G "${CRAFT_ROOT}/lib/libpcre2-8.*" >/dev/null || \
    [[ ! -f "${CRAFT_ROOT}/lib/pkgconfig/libpcre2-8.pc" ]]; then
     echo "PCRE2 is missing/incomplete in the Android prefix; cross-building KDE's pinned PCRE2 10.42."
 
@@ -597,7 +605,7 @@ stage "Done"
 find "${OUT_ROOT}" -maxdepth 3 -type f -printf '%p %k KB\n' | sort
 ; then
     echo "Failed to add dcgettext compatibility symbol to libintl-lite." >&2
-    exit 19
+    exit 20
 fi
 
 stage "Ensure Android PCRE2 runtime prerequisite"
