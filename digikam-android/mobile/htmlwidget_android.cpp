@@ -28,6 +28,20 @@ HTMLWidget::HTMLWidget(QWidget* const parent)
 
 HTMLWidget::~HTMLWidget() = default;
 
+void HTMLWidget::load(const QUrl& url)
+{
+    Q_UNUSED(url);
+
+    // QWebEngineView::load() is unavailable in this Android Qt5 build.
+    // Keep backend initialisation asynchronous so callers waiting on the
+    // JavaScript-ready signal do not stall the mobile UI.
+    QTimer::singleShot(0, this,
+                       [this]()
+        {
+            Q_EMIT signalJavaScriptReady();
+        });
+}
+
 void HTMLWidget::loadInitialHTML(const QString& initialHTML)
 {
     Q_UNUSED(initialHTML);

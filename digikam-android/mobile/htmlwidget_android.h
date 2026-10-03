@@ -2,6 +2,7 @@
 #pragma once
 
 #include <QStringList>
+#include <QUrl>
 #include <QVariant>
 #include <QWidget>
 
@@ -21,6 +22,7 @@ public:
     explicit HTMLWidget(QWidget* const parent = nullptr);
     ~HTMLWidget() override;
 
+    void load(const QUrl& url);
     void loadInitialHTML(const QString& initialHTML);
     QVariant runScript(const QString& scriptCode, bool async = true);
     bool runScript2Coordinates(const QString& scriptCode,
