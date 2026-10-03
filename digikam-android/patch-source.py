@@ -258,7 +258,41 @@ if ffmpeg_marker not in ffmpeg_rules_text:
     )
     ffmpeg_rules_file.write_text(ffmpeg_rules_text, encoding="utf-8")
 
-# 5. Replace desktop-only embedded-web surfaces with Android-safe adapters.
+# 5. Fix an Android-only Marble source path that normal desktop builds never
+# compile. digiKam enables QT_NO_CAST_FROM_ASCII globally, so the raw C string
+# used for the Android plugin filter is rejected by Qt5.
+marble_plugin_manager = (
+    src / "core" / "utilities" / "geolocation" / "engine" /
+    "plugins" / "PluginManager.cpp"
+)
+if not marble_plugin_manager.exists():
+    raise SystemExit(
+        f"Could not locate bundled Marble PluginManager: {marble_plugin_manager}"
+    )
+
+marble_plugin_text = marble_plugin_manager.read_text(encoding="utf-8")
+marble_android_filter_old = (
+    'QStringList pluginNameFilter      = QStringList() << "lib*.so";'
+)
+marble_android_filter_new = (
+    'QStringList pluginNameFilter      = '
+    'QStringList() << QLatin1String("lib*.so");'
+)
+
+if marble_android_filter_old in marble_plugin_text:
+    marble_plugin_text = marble_plugin_text.replace(
+        marble_android_filter_old,
+        marble_android_filter_new,
+        1,
+    )
+elif marble_android_filter_new not in marble_plugin_text:
+    raise SystemExit(
+        "Could not locate Android Marble plugin-name filter for Qt string fix"
+    )
+
+marble_plugin_manager.write_text(marble_plugin_text, encoding="utf-8")
+
+# 6. Replace desktop-only embedded-web surfaces with Android-safe adapters.
 # Qt WebEngine is not available in the pinned Qt5 Android toolchain. Keep
 # digiKam's core model/database/photo functionality while routing browser
 # actions to Android and preserving geolocation APIs with a placeholder widget.
@@ -415,7 +449,7 @@ for template_name, destination in android_replacements.items():
 
     shutil.copy2(source, destination)
 
-# 6. Install Android manifest, splash, icon, and mobile UI source next to the target.
+# 7. Install Android manifest, splash, icon, and mobile UI source next to the target.
 android_dir = target_file.parent / "android"
 (android_dir / "res" / "drawable").mkdir(parents=True, exist_ok=True)
 shutil.copy2(android_template / "AndroidManifest.xml", android_dir / "AndroidManifest.xml")
