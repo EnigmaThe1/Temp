@@ -405,10 +405,9 @@ if qt_network_link not in digikam_core_text:
     digikam_core_target.write_text(digikam_core_text, encoding="utf-8")
 
 # The bundled LQR implementation is compiled directly into digikamcore and
-# calls GLib APIs. Upstream normally obtains GLib through FindGLIB2 cache
-# variables; a persistent Android build cache can retain stale values after a
-# dependency-layout repair. Resolve a fresh Android-only library variable and
-# link it explicitly at the target that owns those references.
+# calls GLib APIs. The persistent Android cache can retain stale FindGLIB2
+# results and an APK-normalised unversioned linker name. Bypass both by linking
+# the untouched versioned GLib runtime file directly from the Craft prefix.
 digikam_core_text = digikam_core_target.read_text(encoding="utf-8")
 android_glib_marker = "# DIGIKAM_ANDROID_EXPLICIT_GLIB"
 
@@ -416,15 +415,18 @@ if android_glib_marker not in digikam_core_text:
     android_glib_link = """
 if(ANDROID)
     # DIGIKAM_ANDROID_EXPLICIT_GLIB
-    find_library(DIGIKAM_ANDROID_GLIB2_LIBRARY NAMES glib-2.0)
+    set(DIGIKAM_ANDROID_GLIB2_LIBRARY
+        "${CMAKE_INSTALL_PREFIX}/lib/libglib-2.0.so.0"
+    )
 
-    if(NOT DIGIKAM_ANDROID_GLIB2_LIBRARY)
-        message(FATAL_ERROR "Android digiKam core requires glib-2.0")
+    if(NOT EXISTS "${DIGIKAM_ANDROID_GLIB2_LIBRARY}")
+        message(FATAL_ERROR
+                "Android digiKam core requires ${DIGIKAM_ANDROID_GLIB2_LIBRARY}")
     endif()
 
     target_link_libraries(digikamcore
                           PRIVATE
-                          ${DIGIKAM_ANDROID_GLIB2_LIBRARY}
+                          "${DIGIKAM_ANDROID_GLIB2_LIBRARY}"
     )
 endif()
 """
