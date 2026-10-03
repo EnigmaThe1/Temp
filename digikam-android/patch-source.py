@@ -189,7 +189,58 @@ else:
 
 main_file.write_text(main_text, encoding="utf-8")
 
-# 3. Install Android manifest, splash, icon, and mobile UI source next to the target.
+# 3. digiKam 9.1 still discovers Qt WebEngine Widgets unconditionally in
+# RulesQtFramework.cmake, before ENABLE_QWEBENGINE=OFF can take effect.
+# Qt WebEngine is intentionally absent from this Android Qt5 port, so make the
+# required WebEngineWidgets lookup obey digiKam's existing feature option.
+qt_rules_file = src / "core" / "cmake" / "rules" / "RulesQtFramework.cmake"
+if not qt_rules_file.exists():
+    raise SystemExit(f"Could not locate Qt dependency rules: {qt_rules_file}")
+
+qt_rules_text = qt_rules_file.read_text(encoding="utf-8")
+qwebengine_marker = "# DIGIKAM_ANDROID_OPTIONAL_WEBENGINE"
+
+if qwebengine_marker not in qt_rules_text:
+    component_pos = qt_rules_text.find("WebEngineWidgets")
+    if component_pos < 0:
+        raise SystemExit(
+            f"Could not locate WebEngineWidgets dependency in {qt_rules_file}"
+        )
+
+    find_start = qt_rules_text.rfind("find_package(", 0, component_pos)
+    find_end = qt_rules_text.find(")", component_pos)
+
+    if find_start < 0 or find_end < 0:
+        raise SystemExit(
+            f"Could not isolate WebEngineWidgets find_package block in {qt_rules_file}"
+        )
+
+    find_end += 1
+    webengine_find = qt_rules_text[find_start:find_end]
+
+    if "WebEngineWidgets" not in webengine_find:
+        raise SystemExit(
+            f"Wrong Qt dependency block selected in {qt_rules_file}"
+        )
+
+    indented_find = "\n".join(
+        ("    " + line) if line.strip() else line
+        for line in webengine_find.splitlines()
+    )
+    guarded_find = (
+        "if(ENABLE_QWEBENGINE)\n"
+        f"    {qwebengine_marker}\n"
+        f"{indented_find}\n"
+        "endif()"
+    )
+    qt_rules_text = (
+        qt_rules_text[:find_start]
+        + guarded_find
+        + qt_rules_text[find_end:]
+    )
+    qt_rules_file.write_text(qt_rules_text, encoding="utf-8")
+
+# 4. Install Android manifest, splash, icon, and mobile UI source next to the target.
 android_dir = target_file.parent / "android"
 (android_dir / "res" / "drawable").mkdir(parents=True, exist_ok=True)
 shutil.copy2(android_template / "AndroidManifest.xml", android_dir / "AndroidManifest.xml")
@@ -221,5 +272,6 @@ for name in ("mobileuiadapter.cpp", "mobileuiadapter.h"):
 print(f"Patched source tree: {src}")
 print(f"  target: {target_file}")
 print(f"  main:   {main_file}")
+print(f"  qtrules:{qt_rules_file}")
 print(f"  android:{android_dir}")
 print(f"  mobile: {mobile_dst / 'mobileuiadapter.cpp'}")
