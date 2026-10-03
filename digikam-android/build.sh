@@ -533,10 +533,52 @@ PATCHELF="${CRAFT_ROOT}/dev-utils/bin/patchelf"
 if [[ ! -x "${PATCHELF}" ]]; then
     PATCHELF="$(command -v patchelf || true)"
 fi
+
+# The retired Qt5 Android Craft workspace does not install its Linux-only
+# dev-utils/patchelf package because the active compiler target is Android.
+# Build the exact pinned Craft release natively with the container's host
+# compiler; never cross-compile this utility with the NDK.
+if [[ -z "${PATCHELF}" || ! -x "${PATCHELF}" ]]; then
+    PATCHELF_VER="0.18.0"
+    PATCHELF_SHA256="64de10e4c6b8b8379db7e87f58030f336ea747c0515f381132e810dbf84a86e7"
+    PATCHELF_ARCHIVE="${WORK_ROOT}/patchelf-${PATCHELF_VER}.tar.gz"
+    PATCHELF_SRC="${WORK_ROOT}/patchelf-${PATCHELF_VER}"
+    PATCHELF_PREFIX="${WORK_ROOT}/host-patchelf"
+    PATCHELF_URL="https://github.com/NixOS/patchelf/releases/download/${PATCHELF_VER}/patchelf-${PATCHELF_VER}.tar.gz"
+
+    echo "Host patchelf is absent; building pinned patchelf ${PATCHELF_VER} natively."
+    curl -fL --retry 10 --retry-all-errors --retry-delay 2 \
+        "${PATCHELF_URL}" -o "${PATCHELF_ARCHIVE}"
+    echo "${PATCHELF_SHA256}  ${PATCHELF_ARCHIVE}" | sha256sum -c -
+
+    rm -rf "${PATCHELF_SRC}" "${PATCHELF_PREFIX}"
+    tar -xzf "${PATCHELF_ARCHIVE}" -C "${WORK_ROOT}"
+
+    stage "00-build-host-patchelf"
+    (
+        unset CC CXX CPP CFLAGS CXXFLAGS CPPFLAGS LDFLAGS AR AS LD NM RANLIB STRIP
+        cd "${PATCHELF_SRC}"
+        ./configure --prefix="${PATCHELF_PREFIX}"
+        make -j2
+        make install
+    ) 2>&1 | tee "${LOG_ROOT}/00-build-host-patchelf.log"
+    PATCHELF_RC=${PIPESTATUS[0]}
+
+    if [[ ${PATCHELF_RC} -ne 0 ]]; then
+        echo "Native host patchelf build failed." >&2
+        exit "${PATCHELF_RC}"
+    fi
+
+    PATCHELF="${PATCHELF_PREFIX}/bin/patchelf"
+fi
+
 if [[ -z "${PATCHELF}" || ! -x "${PATCHELF}" ]]; then
     echo "patchelf is required to normalize Android runtime SONAMEs." >&2
     exit 27
 fi
+
+echo "Using host patchelf: ${PATCHELF}"
+"${PATCHELF}" --version | tee "${LOG_ROOT}/patchelf-version.log"
 
 find_versioned_runtime_lib() {
     local pattern="$1"
