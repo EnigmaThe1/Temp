@@ -339,7 +339,7 @@ libsinfo_candidates = [
 ]
 
 web_version_include = re.compile(
-    r"(?m)^#\\s*include\\s*<QtWeb(?:Engine|Kit)WidgetsVersion>\\s*$"
+    r"(?m)^#\s*include\s*<QtWeb(?:Engine|Kit)WidgetsVersion>\s*$"
 )
 
 libsinfo = None
@@ -377,8 +377,8 @@ if web_version_include_count == 0:
     )
 
 web_version_compat = (
-    '#define QTWEBENGINEWIDGETS_VERSION_STR "disabled on Android"\\n'
-    '#define QTWEBKITWIDGETS_VERSION_STR "disabled on Android"\\n'
+    '#define QTWEBENGINEWIDGETS_VERSION_STR "disabled on Android"\n'
+    '#define QTWEBKITWIDGETS_VERSION_STR "disabled on Android"\n'
 )
 
 config_include = '#include "digikam_config.h"'
@@ -389,7 +389,7 @@ if config_include not in libsinfo_text:
 
 libsinfo_text = libsinfo_text.replace(
     config_include,
-    config_include + "\\n" + web_version_compat,
+    config_include + "\n" + web_version_compat,
     1,
 )
 libsinfo.write_text(libsinfo_text, encoding="utf-8")
