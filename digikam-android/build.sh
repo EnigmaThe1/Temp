@@ -216,8 +216,49 @@ CRAFT_OPT="digikam.srcDir=${SRC_DIR}"
 
 stage "Ensure Android iconv/libintl runtime prerequisites"
 if ! compgen -G "${CRAFT_ROOT}/lib/libiconv.*" >/dev/null; then
-    echo "libiconv is missing from the cached Android prefix; rebuilding it."
+    echo "libiconv is missing from the cached Android prefix; enabling only its retired Unix recipe temporarily."
+
+    UNIX_LIBS_INFO="$(find "${CRAFT_SEARCH_ROOTS[@]}" -type f -path '*/blueprints/libs/_unix/info.ini' -print -quit 2>/dev/null || true)"
+    if [[ -z "${UNIX_LIBS_INFO}" ]]; then
+        echo "Could not locate retired Craft libs/_unix/info.ini for libiconv" >&2
+        exit 13
+    fi
+
+    UNIX_LIBS_INFO_BACKUP="${WORK_ROOT}/unix-libs-info.ini.orig"
+    cp "${UNIX_LIBS_INFO}" "${UNIX_LIBS_INFO_BACKUP}"
+
+    python3 - "${UNIX_LIBS_INFO}" <<'PY'
+from pathlib import Path
+import sys
+
+p = Path(sys.argv[1])
+text = p.read_text(encoding="utf-8")
+old = "platforms = macos;linux;freebsd"
+if old in text:
+    text = text.replace(old, old + ";android", 1)
+elif "android" not in text.lower():
+    raise SystemExit("Unexpected retired _unix category metadata: " + text)
+p.write_text(text, encoding="utf-8")
+print("Temporarily enabled Android for retired libs/_unix category:", p)
+PY
+
+    set +e
     run_logged "00-install-iconv" craft -i libs/iconv
+    ICONV_RC=$?
+    set -e
+
+    cp "${UNIX_LIBS_INFO_BACKUP}" "${UNIX_LIBS_INFO}"
+    rm -f "${UNIX_LIBS_INFO_BACKUP}"
+
+    if [[ ${ICONV_RC} -ne 0 ]]; then
+        exit "${ICONV_RC}"
+    fi
+
+    if ! compgen -G "${CRAFT_ROOT}/lib/libiconv.*" >/dev/null; then
+        echo "Craft reported libiconv success but no linkable libiconv was installed." >&2
+        find "${CRAFT_ROOT}" -maxdepth 4 \( -name 'libiconv*' -o -name 'iconv.h' \) -print || true
+        exit 14
+    fi
 else
     echo "libiconv already present in ${CRAFT_ROOT}/lib"
 fi
