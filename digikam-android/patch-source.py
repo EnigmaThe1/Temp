@@ -356,6 +356,41 @@ for rel, target_name in (
 
     cmake_file.write_text(cmake_text, encoding="utf-8")
 
+# The Android welcome page is a compact mobile replacement. digiKam 9.1 splits
+# the desktop welcome page into private/background, About, Features, and Credits
+# translation units; none are used by the Android replacement and they depend
+# on private methods intentionally absent from the mobile class.
+digikam_gui_target = src / "core" / "app" / "DigikamGuiTarget.cmake"
+digikam_gui_text = digikam_gui_target.read_text(encoding="utf-8")
+desktop_welcome_sources = (
+    "views/stack/welcomepageview_p.cpp",
+    "views/stack/welcomepageview_about.cpp",
+    "views/stack/welcomepageview_features.cpp",
+    "views/stack/welcomepageview_credits.cpp",
+)
+
+removed_welcome_sources = 0
+digikam_gui_lines = []
+
+for line in digikam_gui_text.splitlines():
+    if any(source_name in line for source_name in desktop_welcome_sources):
+        removed_welcome_sources += 1
+        continue
+
+    digikam_gui_lines.append(line)
+
+if removed_welcome_sources != len(desktop_welcome_sources):
+    raise SystemExit(
+        "Could not remove all desktop welcome-page companion sources from "
+        f"{digikam_gui_target}: removed {removed_welcome_sources}/"
+        f"{len(desktop_welcome_sources)}"
+    )
+
+digikam_gui_target.write_text(
+    "\n".join(digikam_gui_lines) + "\n",
+    encoding="utf-8",
+)
+
 generic_plugins = src / "core" / "dplugins" / "generic" / "CMakeLists.txt"
 generic_text = generic_plugins.read_text(encoding="utf-8")
 if "add_subdirectory(webservices)" not in generic_text:
