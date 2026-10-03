@@ -437,6 +437,26 @@ digikam_gui_target.write_text(
     encoding="utf-8",
 )
 
+# CMake AUTOMOC automatically probes a same-base *_p.h when it sees
+# welcomepageview.cpp. The desktop private header contains Q_OBJECT helper
+# classes whose implementations were intentionally removed above. Replace the
+# unused private header with an inert Android stub so AUTOMOC does not emit
+# dead vtables for those desktop-only helpers.
+welcome_private_header = (
+    src / "core" / "app" / "views" / "stack" / "welcomepageview_p.h"
+)
+if not welcome_private_header.exists():
+    raise SystemExit(
+        f"Could not locate desktop welcome private header: {welcome_private_header}"
+    )
+
+welcome_private_header.write_text(
+    "#pragma once\n"
+    "\n"
+    "// Android Qt5 port: desktop welcome-page private helpers are disabled.\n",
+    encoding="utf-8",
+)
+
 generic_plugins = src / "core" / "dplugins" / "generic" / "CMakeLists.txt"
 generic_text = generic_plugins.read_text(encoding="utf-8")
 if "add_subdirectory(webservices)" not in generic_text:
