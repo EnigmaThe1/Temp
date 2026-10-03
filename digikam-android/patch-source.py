@@ -333,16 +333,39 @@ generic_text = generic_text.replace(
 )
 generic_plugins.write_text(generic_text, encoding="utf-8")
 
-libsinfo = src / "core" / "libs" / "dialogs" / "libsinfodlg.cpp"
-libsinfo_text = libsinfo.read_text(encoding="utf-8")
+libsinfo_candidates = [
+    src / "core" / "libs" / "dialogs" / "libsinfodlg_p.h",
+    src / "core" / "libs" / "dialogs" / "libsinfodlg.cpp",
+]
 
-# digiKam source variants format the WebEngine/WebKit version include block
-# differently. Remove only the version-header include lines, irrespective of
-# whitespace/preprocessor layout, and provide the strings the existing dialog
-# expects. This works whether HAVE_QWEBENGINE selects WebEngine or WebKit.
 web_version_include = re.compile(
     r"(?m)^#\\s*include\\s*<QtWeb(?:Engine|Kit)WidgetsVersion>\\s*$"
 )
+
+libsinfo = None
+libsinfo_text = None
+
+for candidate in libsinfo_candidates:
+    if not candidate.exists():
+        continue
+
+    candidate_text = candidate.read_text(encoding="utf-8")
+
+    if web_version_include.search(candidate_text):
+        libsinfo = candidate
+        libsinfo_text = candidate_text
+        break
+
+if libsinfo is None or libsinfo_text is None:
+    raise SystemExit(
+        "Could not locate digiKam WebEngine/WebKit version header include "
+        "in libsinfodlg_p.h or libsinfodlg.cpp"
+    )
+
+# digiKam 9.1 moved the common library-dialog includes into libsinfodlg_p.h;
+# older source trees kept them in libsinfodlg.cpp. Remove the embedded-web
+# version headers from whichever layout is present and provide the version
+# strings consumed by the existing dialog code.
 libsinfo_text, web_version_include_count = web_version_include.subn(
     "",
     libsinfo_text,
@@ -350,7 +373,7 @@ libsinfo_text, web_version_include_count = web_version_include.subn(
 
 if web_version_include_count == 0:
     raise SystemExit(
-        "Could not locate digiKam WebEngine/WebKit version header includes"
+        f"Could not remove digiKam WebEngine/WebKit version headers from {libsinfo}"
     )
 
 web_version_compat = (
@@ -360,7 +383,9 @@ web_version_compat = (
 
 config_include = '#include "digikam_config.h"'
 if config_include not in libsinfo_text:
-    raise SystemExit("Could not locate digikam_config.h include in libsinfodlg.cpp")
+    raise SystemExit(
+        f"Could not locate digikam_config.h include in {libsinfo}"
+    )
 
 libsinfo_text = libsinfo_text.replace(
     config_include,
