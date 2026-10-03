@@ -526,6 +526,43 @@ stage "Clear failed Qt5 unpack state"
 rm -rf "${CRAFT_ROOT}/build/libs/qt5/qtbase/work"
 rm -rf "${CRAFT_ROOT}/build/libs/qt5/qtmultimedia/work"
 
+# A failed/experimental APK-normalisation run may have been saved into the
+# persistent Actions cache. Restore the normal development linker names from
+# the untouched versioned ELF files before CMake/ninja can relink anything.
+find_versioned_link_target() {
+    local pattern="$1"
+    find "${CRAFT_ROOT}/lib" -maxdepth 1 \
+        \( -type f -o -type l \) -name "${pattern}" -print 2>/dev/null \
+        | sort -V | tail -n1
+}
+
+restore_linker_name() {
+    local pattern="$1"
+    local output_name="$2"
+    local source_path
+    source_path="$(find_versioned_link_target "${pattern}")"
+
+    [[ -n "${source_path}" ]] || return 0
+
+    local output_path="${CRAFT_ROOT}/lib/${output_name}"
+    rm -f "${output_path}"
+    ln -s "$(basename "${source_path}")" "${output_path}"
+    echo "Restored linker name ${output_path} -> $(basename "${source_path}")"
+}
+
+restore_android_linker_names() {
+    restore_linker_name 'libglib-2.0.so.0*' 'libglib-2.0.so'
+    restore_linker_name 'libinih.so.0*' 'libinih.so'
+    restore_linker_name 'libINIReader.so.0*' 'libINIReader.so'
+}
+
+stage "Restore cached Android linker names"
+restore_android_linker_names
+
+# Always leave the persistent Craft cache in its normal link-development
+# layout, including when a later APK validation step fails.
+trap 'restore_android_linker_names || true' EXIT
+
 run_logged "01-install-deps" craft --options "${CRAFT_OPT}" --install-deps digikam
 
 run_logged "02-configure" craft --options "${CRAFT_OPT}" --configure digikam
