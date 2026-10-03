@@ -403,14 +403,13 @@ if qt_network_link not in digikam_core_text:
     digikam_core_target.write_text(digikam_core_text, encoding="utf-8")
 
 # The Android welcome page is a compact mobile replacement. digiKam 9.1 splits
-# the desktop text content into About, Features, and Credits translation units;
-# those depend on private methods intentionally absent from the mobile class.
-# Keep welcomepageview_p.cpp: it also implements GradientWidget,
-# InvertedGradientWidget, ResizableBackgroundWidget and TitleEffect, whose
-# Q_OBJECT-generated vtables are still part of the GUI object library.
+# the desktop welcome page into private/background, About, Features, and Credits
+# translation units; none are used by the Android replacement and they depend
+# on private methods intentionally absent from the mobile class.
 digikam_gui_target = src / "core" / "app" / "DigikamGuiTarget.cmake"
 digikam_gui_text = digikam_gui_target.read_text(encoding="utf-8")
 desktop_welcome_sources = (
+    "views/stack/welcomepageview_p.cpp",
     "views/stack/welcomepageview_about.cpp",
     "views/stack/welcomepageview_features.cpp",
     "views/stack/welcomepageview_credits.cpp",
