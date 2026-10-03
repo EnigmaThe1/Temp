@@ -292,6 +292,30 @@ elif marble_android_filter_new not in marble_plugin_text:
 
 marble_plugin_manager.write_text(marble_plugin_text, encoding="utf-8")
 
+# Qt5 Android in the pinned toolchain exposes QtSvg but not the QSvgWidget
+# widget implementation used only by Marble's optional Overview Map overlay.
+# Keep the full geolocation engine and all other render/runner plugins, but
+# skip this one unsupported mini-overview plugin on Android.
+marble_render_cmake = (
+    src / "core" / "utilities" / "geolocation" / "engine" /
+    "plugins" / "render" / "CMakeLists.txt"
+)
+marble_render_text = marble_render_cmake.read_text(encoding="utf-8")
+overview_line = "add_subdirectory(overviewmap)"
+
+if overview_line in marble_render_text:
+    marble_render_text = marble_render_text.replace(
+        overview_line,
+        "# Android Qt5 port: OverviewMap requires unavailable QSvgWidget.",
+        1,
+    )
+elif "OverviewMap requires unavailable QSvgWidget" not in marble_render_text:
+    raise SystemExit(
+        f"Could not locate Marble overviewmap plugin entry in {marble_render_cmake}"
+    )
+
+marble_render_cmake.write_text(marble_render_text, encoding="utf-8")
+
 # 6. Replace desktop-only embedded-web surfaces with Android-safe adapters.
 # Qt WebEngine is not available in the pinned Qt5 Android toolchain. Keep
 # digiKam's core model/database/photo functionality while routing browser
