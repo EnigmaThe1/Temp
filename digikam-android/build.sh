@@ -747,13 +747,6 @@ SRC_APK="$(realpath "${APKS[0]}")"
 echo "Primary APK: ${SRC_APK}" | tee "${LOG_ROOT}/primary-apk.log"
 
 stage "Normalize packaged Android native runtime"
-ZIP_BIN="$(command -v zip || true)"
-if [[ -z "${ZIP_BIN}" || ! -x "${ZIP_BIN}" ]]; then
-    echo "zip is required to update the unsigned APK payload." >&2
-    echo "FAILED_STAGE=06-native-normalize" | tee "${OUT_ROOT}/build-status.txt"
-    exit 32
-fi
-
 APK_PATCH_ROOT="${WORK_ROOT}/apk-native-patch"
 APK_PATCH_LIB="${APK_PATCH_ROOT}/lib/arm64-v8a"
 rm -rf "${APK_PATCH_ROOT}"
@@ -831,16 +824,54 @@ echo "Injected loadable QSQLite plugin: ${QSQLITE_NAME}"
 patch_needed_if_present "${APK_PATCH_LIB}/libINIReader.so" "libinih.so.0" "libinih.so"
 mark_apk_changed "${APK_PATCH_LIB}/libINIReader.so"
 
-(
-    cd "${APK_PATCH_ROOT}"
+APK_CHANGED_LIST="${WORK_ROOT}/apk-native-changed.txt"
+printf '%s\n' "${!APK_CHANGED[@]}" | sort > "${APK_CHANGED_LIST}"
 
-    for rel in "${!APK_CHANGED[@]}"; do
-        "${ZIP_BIN}" -q -0 -u "${SRC_APK}" "${rel}"
-    done
-)
+python3 - "${SRC_APK}" "${APK_PATCH_ROOT}" "${APK_CHANGED_LIST}" <<'PY'
+from pathlib import Path
+from zipfile import ZIP_STORED, ZipFile, ZipInfo
+import os
+import sys
+
+apk = Path(sys.argv[1]).resolve()
+patch_root = Path(sys.argv[2]).resolve()
+changed_file = Path(sys.argv[3]).resolve()
+changed = {
+    line.strip()
+    for line in changed_file.read_text(encoding="utf-8").splitlines()
+    if line.strip()
+}
+
+if not changed:
+    raise SystemExit("No APK native entries were selected for replacement")
+
+for rel in changed:
+    candidate = patch_root / rel
+    if not candidate.is_file():
+        raise SystemExit(f"Replacement APK entry is missing: {candidate}")
+
+tmp = apk.with_name(apk.name + ".native-normalized.tmp")
+
+with ZipFile(apk, "r") as source, ZipFile(tmp, "w") as target:
+    for info in source.infolist():
+        if info.filename in changed:
+            continue
+
+        target.writestr(info, source.read(info.filename))
+
+    for rel in sorted(changed):
+        data = (patch_root / rel).read_bytes()
+        info = ZipInfo(rel)
+        info.compress_type = ZIP_STORED
+        info.external_attr = 0o100755 << 16
+        target.writestr(info, data, compress_type=ZIP_STORED)
+
+os.replace(tmp, apk)
+print(f"Rebuilt unsigned APK with {len(changed)} normalized native entries: {apk}")
+PY
 
 echo "Updated APK native entries:" | tee "${LOG_ROOT}/apk-native-normalize.log"
-printf '%s\n' "${!APK_CHANGED[@]}" | sort | tee -a "${LOG_ROOT}/apk-native-normalize.log"
+cat "${APK_CHANGED_LIST}" | tee -a "${LOG_ROOT}/apk-native-normalize.log"
 
 stage "Validate APK native dependency closure"
 APK_CHECK_ROOT="${WORK_ROOT}/apk-native-check"
