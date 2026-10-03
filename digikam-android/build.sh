@@ -743,13 +743,83 @@ if [[ ${#APKS[@]} -eq 0 ]]; then
     exit 4
 fi
 
-for apk in "${APKS[@]}"; do
-    base="$(basename "${apk}")"
-    cp -f "${apk}" "${OUT_ROOT}/apk/${base}"
+SRC_APK="$(realpath "${APKS[0]}")"
+echo "Primary APK: ${SRC_APK}" | tee "${LOG_ROOT}/primary-apk.log"
+
+stage "Normalize packaged Android native runtime"
+ZIP_BIN="$(command -v zip || true)"
+if [[ -z "${ZIP_BIN}" || ! -x "${ZIP_BIN}" ]]; then
+    echo "zip is required to update the unsigned APK payload." >&2
+    echo "FAILED_STAGE=06-native-normalize" | tee "${OUT_ROOT}/build-status.txt"
+    exit 32
+fi
+
+APK_PATCH_ROOT="${WORK_ROOT}/apk-native-patch"
+APK_PATCH_LIB="${APK_PATCH_ROOT}/lib/arm64-v8a"
+rm -rf "${APK_PATCH_ROOT}"
+mkdir -p "${APK_PATCH_ROOT}"
+unzip -q "${SRC_APK}" 'lib/arm64-v8a/*.so' -d "${APK_PATCH_ROOT}"
+
+declare -A APK_CHANGED=()
+
+mark_apk_changed() {
+    local binary="$1"
+    local rel="lib/arm64-v8a/$(basename "${binary}")"
+    APK_CHANGED["${rel}"]=1
+}
+
+while IFS= read -r binary; do
+    changed=0
+
+    for mapping in \
+        "libglib-2.0.so.0:libglib-2.0.so" \
+        "libinih.so.0:libinih.so" \
+        "libINIReader.so.0:libINIReader.so"
+    do
+        old_needed="${mapping%%:*}"
+        new_needed="${mapping#*:}"
+
+        if "${PATCHELF}" --print-needed "${binary}" 2>/dev/null | grep -Fxq "${old_needed}"; then
+            "${PATCHELF}" --replace-needed "${old_needed}" "${new_needed}" "${binary}"
+            echo "APK payload patched: $(basename "${binary}") ${old_needed} -> ${new_needed}"
+            changed=1
+        fi
+    done
+
+    if [[ ${changed} -eq 1 ]]; then
+        mark_apk_changed "${binary}"
+    fi
+done < <(find "${APK_PATCH_LIB}" -type f -name '*.so' -print | sort)
+
+for runtime_name in libglib-2.0.so libinih.so libINIReader.so; do
+    runtime_src="${CRAFT_ROOT}/lib/${runtime_name}"
+
+    if [[ ! -f "${runtime_src}" ]]; then
+        echo "Required normalized runtime is missing: ${runtime_src}" >&2
+        echo "FAILED_STAGE=06-native-normalize" | tee "${OUT_ROOT}/build-status.txt"
+        exit 33
+    fi
+
+    cp -f "${runtime_src}" "${APK_PATCH_LIB}/${runtime_name}"
+    APK_CHANGED["lib/arm64-v8a/${runtime_name}"]=1
 done
 
+# Ensure the packaged INIReader copy references the normalized inih SONAME.
+patch_needed_if_present "${APK_PATCH_LIB}/libINIReader.so" "libinih.so.0" "libinih.so"
+mark_apk_changed "${APK_PATCH_LIB}/libINIReader.so"
+
+(
+    cd "${APK_PATCH_ROOT}"
+
+    for rel in "${!APK_CHANGED[@]}"; do
+        "${ZIP_BIN}" -q -0 -u "${SRC_APK}" "${rel}"
+    done
+)
+
+echo "Updated APK native entries:" | tee "${LOG_ROOT}/apk-native-normalize.log"
+printf '%s\n' "${!APK_CHANGED[@]}" | sort | tee -a "${LOG_ROOT}/apk-native-normalize.log"
+
 stage "Validate APK native dependency closure"
-SRC_APK="${APKS[0]}"
 APK_CHECK_ROOT="${WORK_ROOT}/apk-native-check"
 APK_LIB_DIR="${APK_CHECK_ROOT}/lib/arm64-v8a"
 rm -rf "${APK_CHECK_ROOT}"
@@ -762,7 +832,7 @@ if [[ ! -x "${READELF}" ]]; then
 fi
 if [[ -z "${READELF}" || ! -x "${READELF}" ]]; then
     echo "readelf is required for APK native dependency validation." >&2
-    echo "FAILED_STAGE=06-native-deps" | tee "${OUT_ROOT}/build-status.txt"
+    echo "FAILED_STAGE=07-native-deps" | tee "${OUT_ROOT}/build-status.txt"
     exit 28
 fi
 
@@ -804,7 +874,7 @@ done < <(find "${APK_LIB_DIR}" -type f -name '*.so' -print | sort)
 
 if [[ ${missing_native} -ne 0 ]]; then
     echo "APK contains unresolved non-system native dependencies." | tee -a "${NATIVE_DEPS_LOG}"
-    echo "FAILED_STAGE=06-native-deps" | tee "${OUT_ROOT}/build-status.txt"
+    echo "FAILED_STAGE=07-native-deps" | tee "${OUT_ROOT}/build-status.txt"
     exit 29
 fi
 
@@ -815,39 +885,18 @@ stage "Validate critical digiKam Android plugins"
 APK_ENTRIES="${LOG_ROOT}/apk-entries.txt"
 unzip -Z1 "${SRC_APK}" | sort > "${APK_ENTRIES}"
 
-if ! grep -Eq '^lib/arm64-v8a/.*qsqlite.*\.so# so the artifact can be installed directly on a device for validation.
-SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
-if [[ -n "${SDK_ROOT}" && -d "${SDK_ROOT}/build-tools" ]]; then
-    BUILD_TOOLS="$(find "${SDK_ROOT}/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n1)"
-    ZIPALIGN="${BUILD_TOOLS}/zipalign"
-    APKSIGNER="${BUILD_TOOLS}/apksigner"
-    if [[ -x "${ZIPALIGN}" && -x "${APKSIGNER}" ]]; then
-        KEYSTORE="${WORK_ROOT}/digikam-test.keystore"
-        keytool -genkeypair -noprompt           -keystore "${KEYSTORE}"           -storepass android           -keypass android           -alias androiddebugkey           -keyalg RSA           -keysize 2048           -validity 10000           -dname "CN=digiKam Android Test,OU=Temp Build,O=Local,C=GB" >/dev/null 2>&1
-
-        ALIGNED="${WORK_ROOT}/digikam-${VERSION}-arm64-v8a-aligned.apk"
-        SIGNED="${OUT_ROOT}/apk/digikam-${VERSION}-arm64-v8a-test-signed.apk"
-        "${ZIPALIGN}" -p -f 4 "${SRC_APK}" "${ALIGNED}"
-        "${APKSIGNER}" sign           --ks "${KEYSTORE}"           --ks-key-alias androiddebugkey           --ks-pass pass:android           --key-pass pass:android           --out "${SIGNED}"           "${ALIGNED}"
-        "${APKSIGNER}" verify --verbose "${SIGNED}" | tee "${LOG_ROOT}/apksigner-verify.log"
-        rm -f "${KEYSTORE}" "${ALIGNED}"
-    else
-        echo "zipalign/apksigner not found; leaving unsigned APK only" | tee "${LOG_ROOT}/signing-warning.log"
-    fi
-fi
-
-sha256sum "${OUT_ROOT}"/apk/*.apk | tee "${OUT_ROOT}/SHA256SUMS.txt"
-echo "SUCCESS" | tee "${OUT_ROOT}/build-status.txt"
-stage "Done"
-find "${OUT_ROOT}" -maxdepth 3 -type f -printf '%p %k KB\n' | sort
- "${APK_ENTRIES}"; then
+if ! grep -Eiq '^lib/arm64-v8a/.*qsqlite.*\.so$' "${APK_ENTRIES}"; then
     echo "The APK does not contain the Qt QSQLite driver required by digiKam's database." >&2
     grep -i 'sqlite' "${APK_ENTRIES}" >&2 || true
-    echo "FAILED_STAGE=07-critical-plugins" | tee "${OUT_ROOT}/build-status.txt"
+    echo "FAILED_STAGE=08-critical-plugins" | tee "${OUT_ROOT}/build-status.txt"
     exit 31
 fi
 
 echo "Critical Qt QSQLite driver is packaged." | tee "${LOG_ROOT}/critical-plugins.log"
+
+stage "Collect corrected APK artifacts"
+UNSIGNED_OUT="${OUT_ROOT}/apk/digikam-${VERSION}-arm64-v8a-unsigned.apk"
+cp -f "${SRC_APK}" "${UNSIGNED_OUT}"
 
 # KDE Craft/ECM commonly produces an unsigned APK. Sign a disposable test APK
 # so the artifact can be installed directly on a device for validation.
@@ -856,14 +905,32 @@ if [[ -n "${SDK_ROOT}" && -d "${SDK_ROOT}/build-tools" ]]; then
     BUILD_TOOLS="$(find "${SDK_ROOT}/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n1)"
     ZIPALIGN="${BUILD_TOOLS}/zipalign"
     APKSIGNER="${BUILD_TOOLS}/apksigner"
+
     if [[ -x "${ZIPALIGN}" && -x "${APKSIGNER}" ]]; then
         KEYSTORE="${WORK_ROOT}/digikam-test.keystore"
-        keytool -genkeypair -noprompt           -keystore "${KEYSTORE}"           -storepass android           -keypass android           -alias androiddebugkey           -keyalg RSA           -keysize 2048           -validity 10000           -dname "CN=digiKam Android Test,OU=Temp Build,O=Local,C=GB" >/dev/null 2>&1
+        keytool -genkeypair -noprompt \
+            -keystore "${KEYSTORE}" \
+            -storepass android \
+            -keypass android \
+            -alias androiddebugkey \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=digiKam Android Test,OU=Temp Build,O=Local,C=GB" \
+            >/dev/null 2>&1
 
         ALIGNED="${WORK_ROOT}/digikam-${VERSION}-arm64-v8a-aligned.apk"
         SIGNED="${OUT_ROOT}/apk/digikam-${VERSION}-arm64-v8a-test-signed.apk"
+
         "${ZIPALIGN}" -p -f 4 "${SRC_APK}" "${ALIGNED}"
-        "${APKSIGNER}" sign           --ks "${KEYSTORE}"           --ks-key-alias androiddebugkey           --ks-pass pass:android           --key-pass pass:android           --out "${SIGNED}"           "${ALIGNED}"
+        "${APKSIGNER}" sign \
+            --ks "${KEYSTORE}" \
+            --ks-key-alias androiddebugkey \
+            --ks-pass pass:android \
+            --key-pass pass:android \
+            --out "${SIGNED}" \
+            "${ALIGNED}"
+
         "${APKSIGNER}" verify --verbose "${SIGNED}" | tee "${LOG_ROOT}/apksigner-verify.log"
         rm -f "${KEYSTORE}" "${ALIGNED}"
     else
@@ -873,5 +940,6 @@ fi
 
 sha256sum "${OUT_ROOT}"/apk/*.apk | tee "${OUT_ROOT}/SHA256SUMS.txt"
 echo "SUCCESS" | tee "${OUT_ROOT}/build-status.txt"
+
 stage "Done"
 find "${OUT_ROOT}" -maxdepth 3 -type f -printf '%p %k KB\n' | sort
