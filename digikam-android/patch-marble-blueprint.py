@@ -43,12 +43,24 @@ if "-DBUILD_MARBLE_APPS=OFF" not in text:
     )
     text = text[:match.start()] + android + text[match.end():]
 
+# The package-level compatibility hooks below need pathlib inside the patched
+# Craft blueprint itself (not just in this patching helper).
+if "from pathlib import Path" not in text:
+    if "import info\n" not in text:
+        raise SystemExit("Could not locate Marble blueprint import block")
+    text = text.replace("import info\n", "import info\nfrom pathlib import Path\n", 1)
+
 # Craft's Android CMake packager scans every AndroidManifest.xml below the
 # source tree before CMake evaluates BUILD_MARBLE_APPS. Marble's disabled app
 # sources therefore still look like APK targets (marble-maps/MarbleBehaim),
 # and ECM later fails because those targets were intentionally not created.
 # This package is only a digiKam library dependency on Android, so report no
 # Marble APK targets while preserving Craft's normal behaviour elsewhere.
+#
+# Marble 24.02.1 also builds its optional OverviewMap render plugin
+# unconditionally. The plugin uses QSvgWidget, which is absent from this
+# pinned Android Qt5Svg build, while digiKam does not depend on that decoration.
+# Remove just that subdirectory after unpacking on Android.
 if "DIGIKAM_ANDROID_NO_MARBLE_APK_TARGETS" not in text:
     class_match = re.search(
         r"(?m)^(class\s+Package\([^\n]+\):\s*\n)",
@@ -65,8 +77,24 @@ if "DIGIKAM_ANDROID_NO_MARBLE_APK_TARGETS" not in text:
         + "        if CraftCore.compiler.isAndroid:\n"
         + "            return set()\n"
         + "        return super().androidApkTargets\n\n"
+        + "    def unpack(self):\n"
+        + "        if not super().unpack():\n"
+        + "            return False\n"
+        + "        if CraftCore.compiler.isAndroid:\n"
+        + "            render_cmake = Path(self.sourceDir()) / \"src/plugins/render/CMakeLists.txt\"\n"
+        + "            source = render_cmake.read_text(encoding=\"utf-8\")\n"
+        + "            marker = \"# DIGIKAM_ANDROID_NO_OVERVIEWMAP\"\n"
+        + "            needle = \"add_subdirectory( overviewmap )\"\n"
+        + "            if needle in source:\n"
+        + "                source = source.replace(needle, marker, 1)\n"
+        + "                render_cmake.write_text(source, encoding=\"utf-8\")\n"
+        + "            elif marker not in source:\n"
+        + "                raise RuntimeError(\"Could not locate Marble OverviewMap subdirectory\")\n"
+        + "        return True\n\n"
     )
     text = text[:class_match.start()] + override + text[class_match.end():]
+elif "DIGIKAM_ANDROID_NO_OVERVIEWMAP" not in text:
+    raise SystemExit("Marble Android package override exists without OverviewMap suppression")
 
 bp.write_text(text, encoding="utf-8")
 print(f"Patched Marble Craft blueprint: {bp}")
