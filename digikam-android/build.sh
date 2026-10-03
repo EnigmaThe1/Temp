@@ -130,6 +130,7 @@ if [[ -n "${KDE_BP_ROOT}" && -d "${KDE_BP_ROOT}/.git" ]]; then
         libs/lensfun/lensfun.py \
         libs/libusb/libusb.py \
         libs/glib/glib.py \
+        libs/qt5/qtbase/qtbase.py \
         kde/applications/marble/marble.py
     do
         if [[ -e "${KDE_BP_ROOT}/${rel}" ]]; then
@@ -192,6 +193,13 @@ if [[ -z "${GLIB_BP}" ]]; then
 fi
 python3 /workspace/digikam-android/patch-glib-blueprint.py "${GLIB_BP}" | tee "${LOG_ROOT}/patch-glib-blueprint.log"
 
+QTBASE_BP="$(find "${CRAFT_SEARCH_ROOTS[@]}" -type f -path '*/libs/qt5/qtbase/qtbase.py' -print -quit 2>/dev/null || true)"
+if [[ -z "${QTBASE_BP}" ]]; then
+    echo "Could not locate Qt5 qtbase Craft blueprint" >&2
+    exit 21
+fi
+python3 /workspace/digikam-android/patch-qtbase-blueprint.py "${QTBASE_BP}" | tee "${LOG_ROOT}/patch-qtbase-blueprint.log"
+
 MARBLE_BP="$(find "${CRAFT_SEARCH_ROOTS[@]}" -type f -path '*/kde/applications/marble/marble.py' -print -quit 2>/dev/null || true)"
 if [[ -z "${MARBLE_BP}" ]]; then
     echo "Could not locate Marble Craft blueprint" >&2
@@ -207,6 +215,7 @@ cp "${LIBFFI_BP}" "${OUT_ROOT}/evidence/libffi.android.blueprint.py"
 cp "${LENSFUN_BP}" "${OUT_ROOT}/evidence/lensfun.android.blueprint.py"
 cp "${LIBUSB_BP}" "${OUT_ROOT}/evidence/libusb.android.blueprint.py"
 cp "${GLIB_BP}" "${OUT_ROOT}/evidence/glib.android.blueprint.py"
+cp "${QTBASE_BP}" "${OUT_ROOT}/evidence/qtbase.android.blueprint.py"
 cp "${MARBLE_BP}" "${OUT_ROOT}/evidence/marble.android.blueprint.py"
 cp "${SRC_DIR}/core/app/DigikamTarget.cmake" "${OUT_ROOT}/evidence/DigikamTarget.cmake"
 cp "${SRC_DIR}/core/app/main/main.cpp" "${OUT_ROOT}/evidence/main.cpp"
@@ -466,6 +475,12 @@ if ! compgen -G "${CRAFT_ROOT}/lib/libpcre2-8.*" >/dev/null || \
 else
     echo "PCRE2 already present and complete in ${CRAFT_ROOT}"
 fi
+
+stage "Clear failed Qt5 qtbase unpack state"
+# A failed Craft patch/unpack leaves a partially modified source checkout in
+# the persistent Actions cache. Remove only qtbase's disposable work tree so
+# the Android-specific patch policy is applied to a clean source checkout.
+rm -rf "${CRAFT_ROOT}/build/libs/qt5/qtbase/work"
 
 run_logged "01-install-deps" craft --options "${CRAFT_OPT}" --install-deps digikam
 run_logged "02-configure" craft --options "${CRAFT_OPT}" --configure digikam
