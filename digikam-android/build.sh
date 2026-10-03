@@ -485,6 +485,34 @@ else
     echo "PCRE2 already present and complete in ${CRAFT_ROOT}"
 fi
 
+stage "Ensure required Boost.Graph and OpenCV"
+BOOST_GRAPH_HEADER="${CRAFT_ROOT}/include/boost/graph/adjacency_list.hpp"
+if [[ ! -f "${BOOST_GRAPH_HEADER}" ]]; then
+    echo "Boost.Graph headers are missing from the Android prefix; forcing the pinned Craft package to reinstall."
+    run_logged "00-install-boost-graph" craft -i libs/boost/boost-graph
+fi
+
+if [[ ! -f "${BOOST_GRAPH_HEADER}" ]]; then
+    echo "Boost.Graph reinstall completed but ${BOOST_GRAPH_HEADER} is still missing." >&2
+    exit 25
+fi
+
+OPENCV_CONFIG="$(find "${CRAFT_ROOT}" -type f -name 'OpenCVConfig.cmake' -print -quit 2>/dev/null || true)"
+if [[ -z "${OPENCV_CONFIG}" ]]; then
+    echo "OpenCV CMake package metadata is missing from the Android prefix; forcing the patched Craft package to reinstall."
+    run_logged "00-install-opencv" craft -i libs/opencv/opencv
+    OPENCV_CONFIG="$(find "${CRAFT_ROOT}" -type f -name 'OpenCVConfig.cmake' -print -quit 2>/dev/null || true)"
+fi
+
+if [[ -z "${OPENCV_CONFIG}" ]]; then
+    echo "OpenCV reinstall completed but OpenCVConfig.cmake is still missing." >&2
+    exit 26
+fi
+
+echo "Required Android dependencies verified:"
+echo "  Boost.Graph: ${BOOST_GRAPH_HEADER}"
+echo "  OpenCV:      ${OPENCV_CONFIG}"
+
 stage "Clear failed Qt5 unpack state"
 # Failed Craft patch/unpack operations leave partially modified source
 # checkouts in the persistent Actions cache. Remove only the disposable work

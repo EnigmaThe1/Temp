@@ -30,6 +30,18 @@ if breeze_guard not in text:
         raise SystemExit("Could not locate digiKam Plasma Breeze dependency")
     text = text.replace(breeze_dep, breeze_guard, 1)
 
+# digiKam requires Boost.Graph. Desktop builds can rely on a host Boost
+# development package, but Android needs it inside the cross-prefix.
+boost_graph_dep = '        self.runtimeDependencies["libs/boost/boost-graph"] = None\\n'
+boost_graph_guard = '''        if CraftCore.compiler.isAndroid:
+            self.runtimeDependencies["libs/boost/boost-graph"] = None
+'''
+if boost_graph_guard not in text:
+    opencv_dep = '        self.runtimeDependencies["libs/opencv/opencv"] = None\\n'
+    if opencv_dep not in text:
+        raise SystemExit("Could not locate digiKam OpenCV dependency")
+    text = text.replace(opencv_dep, opencv_dep + boost_graph_guard, 1)
+
 # The first Android build uses SQLite only.
 text = text.replace(
     '        self.runtimeDependencies["binary/mysql"] = None',
