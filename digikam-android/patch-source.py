@@ -258,7 +258,101 @@ if ffmpeg_marker not in ffmpeg_rules_text:
     )
     ffmpeg_rules_file.write_text(ffmpeg_rules_text, encoding="utf-8")
 
-# 5. Install Android manifest, splash, icon, and mobile UI source next to the target.
+# 5. Replace desktop-only embedded-web surfaces with Android-safe adapters.
+# Qt WebEngine is not available in the pinned Qt5 Android toolchain. Keep
+# digiKam's core model/database/photo functionality while routing browser
+# actions to Android and preserving geolocation APIs with a placeholder widget.
+
+webengine_include_files = [
+    src / "core" / "libs" / "dialogs" / "CMakeLists.txt",
+    src / "core" / "libs" / "dplugins" / "CMakeLists.txt",
+    src / "core" / "utilities" / "geolocation" / "geoiface" / "CMakeLists.txt",
+    src / "core" / "app" / "CMakeLists.txt",
+]
+
+for cmake_file in webengine_include_files:
+    if not cmake_file.exists():
+        raise SystemExit(f"Missing WebEngine CMake file: {cmake_file}")
+
+    cmake_text = cmake_file.read_text(encoding="utf-8")
+    filtered = "\n".join(
+        line
+        for line in cmake_text.splitlines()
+        if "WebEngineWidgets,INTERFACE_INCLUDE_DIRECTORIES" not in line
+    )
+
+    if filtered == cmake_text.rstrip("\n"):
+        raise SystemExit(
+            f"Could not locate WebEngine include target in {cmake_file}"
+        )
+
+    cmake_file.write_text(filtered + "\n", encoding="utf-8")
+
+for rel, target_name in (
+    ("core/app/DigikamCoreTarget.cmake", "digikamcore"),
+    ("core/app/DigikamGuiTarget.cmake", "digikamgui"),
+):
+    cmake_file = src / rel
+    cmake_text = cmake_file.read_text(encoding="utf-8")
+    pattern = re.compile(
+        r"\n?target_link_libraries\(\s*"
+        + re.escape(target_name)
+        + r"\s+PRIVATE\s+Qt[^\s\)]*::WebEngineWidgets\s*\)\s*",
+        flags=re.MULTILINE,
+    )
+    cmake_text, count = pattern.subn("\n", cmake_text, count=1)
+
+    if count != 1:
+        raise SystemExit(
+            f"Could not remove WebEngine link block for {target_name} in {cmake_file}"
+        )
+
+    cmake_file.write_text(cmake_text, encoding="utf-8")
+
+generic_plugins = src / "core" / "dplugins" / "generic" / "CMakeLists.txt"
+generic_text = generic_plugins.read_text(encoding="utf-8")
+if "add_subdirectory(webservices)" not in generic_text:
+    raise SystemExit("Could not locate generic webservices subdirectory")
+generic_text = generic_text.replace(
+    "add_subdirectory(webservices)",
+    "# Android Qt5 port: embedded-WebEngine web-service plugins are disabled.",
+    1,
+)
+generic_plugins.write_text(generic_text, encoding="utf-8")
+
+libsinfo = src / "core" / "libs" / "dialogs" / "libsinfodlg.cpp"
+libsinfo_text = libsinfo.read_text(encoding="utf-8")
+if "#include <QtWebEngineWidgetsVersion>" not in libsinfo_text:
+    raise SystemExit("Could not locate QtWebEngineWidgetsVersion include")
+libsinfo_text = libsinfo_text.replace(
+    "#include <QtWebEngineWidgetsVersion>",
+    '#define QTWEBENGINEWIDGETS_VERSION_STR "disabled on Android"',
+    1,
+)
+libsinfo.write_text(libsinfo_text, encoding="utf-8")
+
+android_replacements = {
+    "webbrowserdlg_android.cpp":
+        src / "core" / "libs" / "dialogs" / "webbrowserdlg.cpp",
+    "welcomepageview_android.h":
+        src / "core" / "app" / "views" / "stack" / "welcomepageview.h",
+    "welcomepageview_android.cpp":
+        src / "core" / "app" / "views" / "stack" / "welcomepageview.cpp",
+    "htmlwidget_android.h":
+        src / "core" / "utilities" / "geolocation" / "geoiface" / "widgets" / "htmlwidget_qwebengine.h",
+    "htmlwidget_android.cpp":
+        src / "core" / "utilities" / "geolocation" / "geoiface" / "widgets" / "htmlwidget_qwebengine.cpp",
+}
+
+for template_name, destination in android_replacements.items():
+    source = mobile_template / template_name
+
+    if not source.exists():
+        raise SystemExit(f"Missing Android compatibility source: {source}")
+
+    shutil.copy2(source, destination)
+
+# 6. Install Android manifest, splash, icon, and mobile UI source next to the target.
 android_dir = target_file.parent / "android"
 (android_dir / "res" / "drawable").mkdir(parents=True, exist_ok=True)
 shutil.copy2(android_template / "AndroidManifest.xml", android_dir / "AndroidManifest.xml")

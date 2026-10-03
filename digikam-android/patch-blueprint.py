@@ -66,6 +66,7 @@ android_block = '''
                 "-DCMAKE_DISABLE_FIND_PACKAGE_QtAV=ON",
                 "-DENABLE_DBUS=OFF",
                 "-DENABLE_QWEBENGINE=OFF",
+                "-DENABLE_KIO=OFF",
                 "-DENABLE_MYSQLSUPPORT=OFF",
                 "-DENABLE_INTERNALMYSQL=OFF",
                 "-DENABLE_DIGIKAM_MODELTEST=OFF",
