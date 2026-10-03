@@ -485,6 +485,104 @@ else
     echo "PCRE2 already present and complete in ${CRAFT_ROOT}"
 fi
 
+stage "Ensure Android FFmpeg runtime prerequisite"
+if ! compgen -G "\${CRAFT_ROOT}/lib/libavcodec.*" >/dev/null || \
+   [[ ! -f "\${CRAFT_ROOT}/lib/pkgconfig/libavcodec.pc" ]] || \
+   [[ ! -f "\${CRAFT_ROOT}/lib/pkgconfig/libavformat.pc" ]] || \
+   [[ ! -f "\${CRAFT_ROOT}/lib/pkgconfig/libavfilter.pc" ]]; then
+    echo "FFmpeg libraries are missing from the Android prefix; cross-building FFmpeg 4.4.8 for digiKam video metadata support."
+
+    FFMPEG_VER="4.4.8"
+    FFMPEG_SHA256="c73848c4ae283d9eaee7be3b276affbc3543380483555500d0dd2c9b7e1c39c3"
+    FFMPEG_ARCHIVE="\${WORK_ROOT}/ffmpeg-\${FFMPEG_VER}.tar.xz"
+    FFMPEG_SRC="\${WORK_ROOT}/ffmpeg-\${FFMPEG_VER}"
+    FFMPEG_URL="https://ffmpeg.org/releases/ffmpeg-\${FFMPEG_VER}.tar.xz"
+
+    curl -fL --retry 10 --retry-all-errors --retry-delay 2 \
+        "\${FFMPEG_URL}" -o "\${FFMPEG_ARCHIVE}"
+    echo "\${FFMPEG_SHA256}  \${FFMPEG_ARCHIVE}" | sha256sum -c -
+
+    rm -rf "\${FFMPEG_SRC}"
+    tar -xJf "\${FFMPEG_ARCHIVE}" -C "\${WORK_ROOT}"
+
+    NDK_ROOT="\${ANDROID_NDK:-\${ANDROID_NDK_ROOT:-}}"
+    if [[ -z "\${NDK_ROOT}" ]]; then
+        echo "ANDROID_NDK/ANDROID_NDK_ROOT is not set" >&2
+        exit 23
+    fi
+
+    NDK_HOST="\${ANDROID_NDK_HOST:-linux-x86_64}"
+    NDK_BIN="\${NDK_ROOT}/toolchains/llvm/prebuilt/\${NDK_HOST}/bin"
+    NDK_SYSROOT="\${NDK_ROOT}/toolchains/llvm/prebuilt/\${NDK_HOST}/sysroot"
+    API_LEVEL="\${ANDROID_API_LEVEL:-21}"
+
+    stage "00-build-ffmpeg"
+    (
+        cd "\${FFMPEG_SRC}"
+
+        export CC="\${NDK_BIN}/aarch64-linux-android\${API_LEVEL}-clang"
+        export CXX="\${NDK_BIN}/aarch64-linux-android\${API_LEVEL}-clang++"
+        export AR="\${NDK_BIN}/llvm-ar"
+        export NM="\${NDK_BIN}/llvm-nm"
+        export RANLIB="\${NDK_BIN}/llvm-ranlib"
+        export STRIP="\${NDK_BIN}/llvm-strip"
+
+        # Keep pkg-config lookups inside the Android prefix. FFmpeg's internal
+        # decoders/demuxers are sufficient for digiKam; no host multimedia
+        # libraries may leak into this cross build.
+        export PKG_CONFIG_LIBDIR="\${CRAFT_ROOT}/lib/pkgconfig:\${CRAFT_ROOT}/share/pkgconfig"
+        export PKG_CONFIG_PATH="\${PKG_CONFIG_LIBDIR}"
+
+        ./configure \
+            --prefix="\${CRAFT_ROOT}" \
+            --target-os=android \
+            --arch=aarch64 \
+            --enable-cross-compile \
+            --cc="\${CC}" \
+            --cxx="\${CXX}" \
+            --ar="\${AR}" \
+            --nm="\${NM}" \
+            --ranlib="\${RANLIB}" \
+            --strip="\${STRIP}" \
+            --sysroot="\${NDK_SYSROOT}" \
+            --enable-shared \
+            --disable-static \
+            --enable-pic \
+            --disable-symver \
+            --disable-programs \
+            --disable-doc \
+            --disable-debug \
+            --disable-vulkan
+
+        make -j2
+        make install
+    ) 2>&1 | tee "\${LOG_ROOT}/00-build-ffmpeg.log"
+    FFMPEG_RC=\${PIPESTATUS[0]}
+
+    if [[ \${FFMPEG_RC} -ne 0 ]]; then
+        echo "Direct Android FFmpeg build failed." >&2
+        exit "\${FFMPEG_RC}"
+    fi
+
+    missing_ffmpeg=0
+    for component in avcodec avdevice avfilter avformat avutil swscale swresample; do
+        if ! compgen -G "\${CRAFT_ROOT}/lib/lib\${component}.*" >/dev/null; then
+            echo "FFmpeg component lib\${component} was not installed." >&2
+            missing_ffmpeg=1
+        fi
+    done
+
+    if [[ \${missing_ffmpeg} -ne 0 ]]; then
+        find "\${CRAFT_ROOT}" -maxdepth 5 \( -name 'libav*' -o -name 'libsw*' \) -print || true
+        exit 24
+    fi
+
+    echo "Installed Android FFmpeg libraries:"
+    ls -l "\${CRAFT_ROOT}"/lib/libav*.so* "\${CRAFT_ROOT}"/lib/libsw*.so* || true
+else
+    echo "FFmpeg already present and complete in \${CRAFT_ROOT}"
+fi
+
 stage "Clear failed Qt5 unpack state"
 # Failed Craft patch/unpack operations leave partially modified source
 # checkouts in the persistent Actions cache. Remove only the disposable work
