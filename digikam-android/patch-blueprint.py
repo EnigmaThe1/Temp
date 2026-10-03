@@ -73,6 +73,7 @@ android_block = '''
                 "-DDIGIKAMSC_COMPILE_DOC=OFF",
                 "-DDIGIKAMSC_COMPILE_DIGIKAM=ON",
                 "-DBUILD_TESTING=OFF",
+                f"-DOpenCV_DIR={CraftCore.standardDirs.craftRoot() / 'sdk/native/jni'}",
             ]
 
 '''

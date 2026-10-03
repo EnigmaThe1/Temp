@@ -497,21 +497,27 @@ if [[ ! -f "${BOOST_GRAPH_HEADER}" ]]; then
     exit 25
 fi
 
-OPENCV_CONFIG="$(find "${CRAFT_ROOT}" -type f -name 'OpenCVConfig.cmake' -print -quit 2>/dev/null || true)"
-if [[ -z "${OPENCV_CONFIG}" ]]; then
-    echo "OpenCV CMake package metadata is missing from the Android prefix; forcing the patched Craft package to reinstall."
+OPENCV_DIR="${CRAFT_ROOT}/sdk/native/jni"
+OPENCV_CONFIG="${OPENCV_DIR}/OpenCVConfig.cmake"
+if [[ ! -f "${OPENCV_CONFIG}" ]]; then
+    echo "Installed Android OpenCV SDK metadata is missing from ${OPENCV_DIR}; forcing a clean patched Craft reinstall."
+    # OpenCV's Android layout intentionally installs its CMake package under
+    # sdk/native/jni rather than lib/cmake. A config below build/ is only
+    # staging metadata and must never be accepted as an installed dependency.
+    rm -rf "${CRAFT_ROOT}/build/libs/opencv/opencv/work"
     run_logged "00-install-opencv" craft -i libs/opencv/opencv
-    OPENCV_CONFIG="$(find "${CRAFT_ROOT}" -type f -name 'OpenCVConfig.cmake' -print -quit 2>/dev/null || true)"
 fi
 
-if [[ -z "${OPENCV_CONFIG}" ]]; then
-    echo "OpenCV reinstall completed but OpenCVConfig.cmake is still missing." >&2
+if [[ ! -f "${OPENCV_CONFIG}" ]]; then
+    echo "OpenCV reinstall completed but ${OPENCV_CONFIG} is still missing." >&2
+    echo "OpenCVConfig.cmake locations after reinstall:" >&2
+    find "${CRAFT_ROOT}" -type f -name 'OpenCVConfig.cmake' -print >&2 2>/dev/null || true
     exit 26
 fi
 
 echo "Required Android dependencies verified:"
 echo "  Boost headers: ${BOOST_GRAPH_HEADER}"
-echo "  OpenCV:      ${OPENCV_CONFIG}"
+echo "  OpenCV:        ${OPENCV_CONFIG}"
 
 stage "Clear failed Qt5 unpack state"
 # Failed Craft patch/unpack operations leave partially modified source
