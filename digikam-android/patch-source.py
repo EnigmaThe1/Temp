@@ -336,44 +336,37 @@ generic_plugins.write_text(generic_text, encoding="utf-8")
 libsinfo = src / "core" / "libs" / "dialogs" / "libsinfodlg.cpp"
 libsinfo_text = libsinfo.read_text(encoding="utf-8")
 
-# digiKam 9.x source variants either include QtWebEngineWidgetsVersion
-# directly or wrap it in HAVE_QWEBENGINE with a QtWebKit fallback. Neither
-# embedded engine is part of this Android Qt5 port. Remove the complete
-# version-header dependency while preserving the existing information-dialog
-# code by defining both version-string macros locally.
-web_version_compat = (
-    '#define QTWEBENGINEWIDGETS_VERSION_STR "disabled on Android"\n'
-    '#define QTWEBKITWIDGETS_VERSION_STR "disabled on Android"'
+# digiKam source variants format the WebEngine/WebKit version include block
+# differently. Remove only the version-header include lines, irrespective of
+# whitespace/preprocessor layout, and provide the strings the existing dialog
+# expects. This works whether HAVE_QWEBENGINE selects WebEngine or WebKit.
+web_version_include = re.compile(
+    r"(?m)^#\\s*include\\s*<QtWeb(?:Engine|Kit)WidgetsVersion>\\s*$"
 )
-
-conditional_web_version = re.compile(
-    r"(?ms)^#ifdef HAVE_QWEBENGINE\s*\n"
-    r"#\s*include\s*<QtWebEngineWidgetsVersion>\s*\n"
-    r"#else\s*\n"
-    r"#\s*include\s*<QtWebKitWidgetsVersion>\s*\n"
-    r"#endif\s*"
-)
-libsinfo_text, conditional_count = conditional_web_version.subn(
-    web_version_compat + "\n",
+libsinfo_text, web_version_include_count = web_version_include.subn(
+    "",
     libsinfo_text,
-    count=1,
 )
 
-if conditional_count == 0:
-    direct_pattern = re.compile(
-        r"(?m)^#\s*include\s*<QtWebEngineWidgetsVersion>\s*$"
-    )
-    libsinfo_text, direct_count = direct_pattern.subn(
-        web_version_compat,
-        libsinfo_text,
-        count=1,
+if web_version_include_count == 0:
+    raise SystemExit(
+        "Could not locate digiKam WebEngine/WebKit version header includes"
     )
 
-    if direct_count == 0:
-        raise SystemExit(
-            "Could not locate digiKam WebEngine/WebKit version include block"
-        )
+web_version_compat = (
+    '#define QTWEBENGINEWIDGETS_VERSION_STR "disabled on Android"\\n'
+    '#define QTWEBKITWIDGETS_VERSION_STR "disabled on Android"\\n'
+)
 
+config_include = '#include "digikam_config.h"'
+if config_include not in libsinfo_text:
+    raise SystemExit("Could not locate digikam_config.h include in libsinfodlg.cpp")
+
+libsinfo_text = libsinfo_text.replace(
+    config_include,
+    config_include + "\\n" + web_version_compat,
+    1,
+)
 libsinfo.write_text(libsinfo_text, encoding="utf-8")
 
 android_replacements = {
