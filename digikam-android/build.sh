@@ -804,6 +804,29 @@ for runtime_name in libglib-2.0.so libinih.so libINIReader.so; do
     APK_CHANGED["lib/arm64-v8a/${runtime_name}"]=1
 done
 
+# androiddeployqt omitted QSQLite because the retired Craft dependency graph
+# does not mark it as a deploy-time dependency. The .so.debug asset in the APK
+# is symbols only and cannot be loaded. Inject the real Qt5 Android plugin so
+# digiKam can open/create its database on first launch.
+QSQLITE_PLUGIN="$(
+    find "${CRAFT_ROOT}" -type f \
+        -path '*/plugins/sqldrivers/*qsqlite*.so' \
+        ! -name '*.so.debug' \
+        -print -quit 2>/dev/null || true
+)"
+
+if [[ -z "${QSQLITE_PLUGIN}" || ! -f "${QSQLITE_PLUGIN}" ]]; then
+    echo "Loadable Qt QSQLite Android plugin is missing from the Craft prefix." >&2
+    find "${CRAFT_ROOT}" -path '*sqldrivers*' -print >&2 2>/dev/null || true
+    echo "FAILED_STAGE=06-native-normalize" | tee "${OUT_ROOT}/build-status.txt"
+    exit 34
+fi
+
+QSQLITE_NAME="$(basename "${QSQLITE_PLUGIN}")"
+cp -f "${QSQLITE_PLUGIN}" "${APK_PATCH_LIB}/${QSQLITE_NAME}"
+APK_CHANGED["lib/arm64-v8a/${QSQLITE_NAME}"]=1
+echo "Injected loadable QSQLite plugin: ${QSQLITE_NAME}"
+
 # Ensure the packaged INIReader copy references the normalized inih SONAME.
 patch_needed_if_present "${APK_PATCH_LIB}/libINIReader.so" "libinih.so.0" "libinih.so"
 mark_apk_changed "${APK_PATCH_LIB}/libINIReader.so"
