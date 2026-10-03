@@ -25,5 +25,19 @@ if old in text:
 elif 'self.runtimeDependencies["libs/libintl-lite"]' not in text:
     raise SystemExit("Could not locate GLib gettext dependency")
 
+# libintl-lite is a C++ static library. GLib probes libintl with its C
+# compiler, so on Android the probe must also link the NDK C++ runtime.
+# Without this, Meson wrongly concludes that ngettext is unavailable and
+# falls into its proxy-libintl fallback, which is disabled by wrap-mode.
+old_ld = '            self.subinfo.options.configure.ldflags += f" -lintl -liconv"\n'
+new_ld = '''            self.subinfo.options.configure.ldflags += f" -lintl -liconv"
+            if CraftCore.compiler.isAndroid:
+                self.subinfo.options.configure.ldflags += " -lc++_shared"
+'''
+if old_ld in text:
+    text = text.replace(old_ld, new_ld, 1)
+elif '-lc++_shared' not in text:
+    raise SystemExit("Could not locate GLib intl/iconv linker flags")
+
 bp.write_text(text, encoding="utf-8")
 print(f"Patched GLib Android intl dependency: {bp}")
