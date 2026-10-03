@@ -356,6 +356,28 @@ for rel, target_name in (
 
     cmake_file.write_text(cmake_text, encoding="utf-8")
 
+# digiKam 9.1's digikamcore aggregates networking object libraries but does
+# not link Qt Network directly. Desktop builds can acquire it transitively;
+# Android links with --no-undefined, so make the dependency explicit.
+digikam_core_target = src / "core" / "app" / "DigikamCoreTarget.cmake"
+digikam_core_text = digikam_core_target.read_text(encoding="utf-8")
+qt_network_link = "Qt${QT_VERSION_MAJOR}::Network"
+
+if qt_network_link not in digikam_core_text:
+    qt_gui_link = "Qt${QT_VERSION_MAJOR}::Gui"
+
+    if qt_gui_link not in digikam_core_text:
+        raise SystemExit(
+            f"Could not locate Qt GUI link entry in {digikam_core_target}"
+        )
+
+    digikam_core_text = digikam_core_text.replace(
+        qt_gui_link,
+        qt_gui_link + "\n                      " + qt_network_link,
+        1,
+    )
+    digikam_core_target.write_text(digikam_core_text, encoding="utf-8")
+
 # The Android welcome page is a compact mobile replacement. digiKam 9.1 splits
 # the desktop welcome page into private/background, About, Features, and Credits
 # translation units; none are used by the Android replacement and they depend
