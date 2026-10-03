@@ -2,7 +2,7 @@
 #include "webbrowserdlg.h"
 
 #include <QDesktopServices>
-#include <QIcon>
+#include <QShowEvent>
 #include <QTimer>
 
 namespace Digikam
@@ -58,11 +58,6 @@ void WebBrowserDlg::slotLoadingFinished(bool ok)
     Q_UNUSED(ok);
 }
 
-void WebBrowserDlg::slotIconChanged(const QIcon& icon)
-{
-    Q_UNUSED(icon);
-}
-
 void WebBrowserDlg::slotTitleChanged(const QString& title)
 {
     if (!title.isEmpty())
@@ -87,6 +82,11 @@ void WebBrowserDlg::slotDesktopWebBrowser()
     {
         QDesktopServices::openUrl(d->home);
     }
+}
+
+void WebBrowserDlg::showEvent(QShowEvent* event)
+{
+    QDialog::showEvent(event);
 }
 
 void WebBrowserDlg::closeEvent(QCloseEvent* event)
