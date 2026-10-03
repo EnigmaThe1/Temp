@@ -404,6 +404,33 @@ if qt_network_link not in digikam_core_text:
     )
     digikam_core_target.write_text(digikam_core_text, encoding="utf-8")
 
+# The bundled LQR implementation is compiled directly into digikamcore and
+# calls GLib APIs. Upstream normally obtains GLib through FindGLIB2 cache
+# variables; a persistent Android build cache can retain stale values after a
+# dependency-layout repair. Resolve a fresh Android-only library variable and
+# link it explicitly at the target that owns those references.
+digikam_core_text = digikam_core_target.read_text(encoding="utf-8")
+android_glib_marker = "# DIGIKAM_ANDROID_EXPLICIT_GLIB"
+
+if android_glib_marker not in digikam_core_text:
+    android_glib_link = """
+if(ANDROID)
+    # DIGIKAM_ANDROID_EXPLICIT_GLIB
+    find_library(DIGIKAM_ANDROID_GLIB2_LIBRARY NAMES glib-2.0)
+
+    if(NOT DIGIKAM_ANDROID_GLIB2_LIBRARY)
+        message(FATAL_ERROR "Android digiKam core requires glib-2.0")
+    endif()
+
+    target_link_libraries(digikamcore
+                          PRIVATE
+                          ${DIGIKAM_ANDROID_GLIB2_LIBRARY}
+    )
+endif()
+"""
+    digikam_core_text = digikam_core_text.rstrip() + "\n\n" + android_glib_link.lstrip()
+    digikam_core_target.write_text(digikam_core_text, encoding="utf-8")
+
 # The Android welcome page is a compact mobile replacement. digiKam 9.1 splits
 # the desktop welcome page into private/background, About, Features, and Credits
 # translation units; none are used by the Android replacement and they depend
