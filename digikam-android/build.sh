@@ -527,6 +527,91 @@ rm -rf "${CRAFT_ROOT}/build/libs/qt5/qtbase/work"
 rm -rf "${CRAFT_ROOT}/build/libs/qt5/qtmultimedia/work"
 
 run_logged "01-install-deps" craft --options "${CRAFT_OPT}" --install-deps digikam
+
+stage "Normalize versioned Android runtime libraries"
+PATCHELF="${CRAFT_ROOT}/dev-utils/bin/patchelf"
+if [[ ! -x "${PATCHELF}" ]]; then
+    PATCHELF="$(command -v patchelf || true)"
+fi
+if [[ -z "${PATCHELF}" || ! -x "${PATCHELF}" ]]; then
+    echo "patchelf is required to normalize Android runtime SONAMEs." >&2
+    exit 27
+fi
+
+find_versioned_runtime_lib() {
+    local pattern="$1"
+    find "${CRAFT_ROOT}/lib" -maxdepth 1 \
+        \( -type f -o -type l \) -name "${pattern}" -print 2>/dev/null \
+        | sort -V | tail -n1
+}
+
+normalize_runtime_lib() {
+    local pattern="$1"
+    local output_name="$2"
+    local source_path
+    source_path="$(find_versioned_runtime_lib "${pattern}")"
+
+    if [[ -z "${source_path}" ]]; then
+        echo "Could not locate Android runtime library matching ${pattern}" >&2
+        return 1
+    fi
+
+    local output_path="${CRAFT_ROOT}/lib/${output_name}"
+    local temp_path="${output_path}.android-normalized.$"
+
+    cp -L "${source_path}" "${temp_path}"
+    chmod 0755 "${temp_path}" || true
+    "${PATCHELF}" --set-soname "${output_name}" "${temp_path}"
+    rm -f "${output_path}"
+    mv "${temp_path}" "${output_path}"
+
+    echo "Normalized ${source_path} -> ${output_path}"
+}
+
+patch_needed_if_present() {
+    local binary="$1"
+    local old_needed="$2"
+    local new_needed="$3"
+
+    [[ -e "${binary}" ]] || return 0
+
+    if "${PATCHELF}" --print-needed "${binary}" 2>/dev/null | grep -Fxq "${old_needed}"; then
+        "${PATCHELF}" --replace-needed "${old_needed}" "${new_needed}" "${binary}"
+        echo "Patched ${binary}: ${old_needed} -> ${new_needed}"
+    fi
+}
+
+rewrite_versioned_needed_tree() {
+    local root="$1"
+    [[ -d "${root}" ]] || return 0
+
+    while IFS= read -r binary; do
+        patch_needed_if_present "${binary}" "libglib-2.0.so.0" "libglib-2.0.so"
+        patch_needed_if_present "${binary}" "libinih.so.0" "libinih.so"
+        patch_needed_if_present "${binary}" "libINIReader.so.0" "libINIReader.so"
+    done < <(
+        find "${root}" -maxdepth 2 \
+            \( -type f -o -type l \) -name '*.so' -print 2>/dev/null
+    )
+}
+
+if [[ -z "$(find_versioned_runtime_lib 'libinih.so.0*')" || \
+      -z "$(find_versioned_runtime_lib 'libINIReader.so.0*')" ]]; then
+    echo "inih runtime libraries are absent from the Android prefix; installing the pinned Craft package."
+    run_logged "00-install-inih" craft -i libs/inih
+fi
+
+normalize_runtime_lib 'libglib-2.0.so.0*' 'libglib-2.0.so'
+normalize_runtime_lib 'libinih.so.0*' 'libinih.so'
+normalize_runtime_lib 'libINIReader.so.0*' 'libINIReader.so'
+
+# INIReader itself depends on the C inih library.
+patch_needed_if_present "${CRAFT_ROOT}/lib/libINIReader.so" "libinih.so.0" "libinih.so"
+
+# Patch already-installed dependencies (notably Lensfun and Exiv2). Newly
+# linked digiKam libraries will see the normalized SONAMEs above.
+rewrite_versioned_needed_tree "${CRAFT_ROOT}/lib"
+
 run_logged "02-configure" craft --options "${CRAFT_OPT}" --configure digikam
 run_logged "03-compile" craft --options "${CRAFT_OPT}" --compile digikam
 run_logged "04-install" craft --options "${CRAFT_OPT}" --install digikam
@@ -542,6 +627,12 @@ if [[ ${CB_RC} -ne 0 ]]; then
 fi
 BUILD_DIR="$PWD"
 echo "Build dir: ${BUILD_DIR}" | tee "${LOG_ROOT}/build-dir.log"
+
+# Cached digiKam objects may have been linked before the normalized SONAMEs
+# existed. Rewrite any remaining versioned runtime references in both the
+# installed prefix and current build output before androiddeployqt scans them.
+rewrite_versioned_needed_tree "${CRAFT_ROOT}/lib"
+rewrite_versioned_needed_tree "${BUILD_DIR}/lib"
 
 run_logged "05-create-apk" cmake --build . --target create-apk-digikam --parallel 2
 
@@ -559,6 +650,69 @@ for apk in "${APKS[@]}"; do
     cp -f "${apk}" "${OUT_ROOT}/apk/${base}"
 done
 
+stage "Validate APK native dependency closure"
+SRC_APK="${APKS[0]}"
+APK_CHECK_ROOT="${WORK_ROOT}/apk-native-check"
+APK_LIB_DIR="${APK_CHECK_ROOT}/lib/arm64-v8a"
+rm -rf "${APK_CHECK_ROOT}"
+mkdir -p "${APK_CHECK_ROOT}"
+unzip -q "${SRC_APK}" 'lib/arm64-v8a/*.so' -d "${APK_CHECK_ROOT}"
+
+READELF="${NDK_BIN:-}/llvm-readelf"
+if [[ ! -x "${READELF}" ]]; then
+    READELF="$(command -v readelf || true)"
+fi
+if [[ -z "${READELF}" || ! -x "${READELF}" ]]; then
+    echo "readelf is required for APK native dependency validation." >&2
+    echo "FAILED_STAGE=06-native-deps" | tee "${OUT_ROOT}/build-status.txt"
+    exit 28
+fi
+
+NATIVE_DEPS_LOG="${LOG_ROOT}/native-dependency-closure.log"
+: > "${NATIVE_DEPS_LOG}"
+missing_native=0
+
+is_android_system_lib() {
+    case "$1" in
+        libc.so|libm.so|libdl.so|liblog.so|libz.so|libandroid.so|\
+        libjnigraphics.so|libEGL.so|libGLESv1_CM.so|libGLESv2.so|\
+        libOpenSLES.so|libmediandk.so|libcamera2ndk.so|libaaudio.so|\
+        libvulkan.so|libnativewindow.so|libsync.so|libatomic.so)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+while IFS= read -r shared_object; do
+    while IFS= read -r needed; do
+        [[ -n "${needed}" ]] || continue
+
+        if is_android_system_lib "${needed}"; then
+            continue
+        fi
+
+        if [[ ! -f "${APK_LIB_DIR}/${needed}" ]]; then
+            echo "MISSING: $(basename "${shared_object}") -> ${needed}" | tee -a "${NATIVE_DEPS_LOG}"
+            missing_native=1
+        fi
+    done < <(
+        "${READELF}" -d "${shared_object}" 2>/dev/null \
+            | sed -n 's/.*Shared library: \[\([^]]*\)\].*/\1/p'
+    )
+done < <(find "${APK_LIB_DIR}" -type f -name '*.so' -print | sort)
+
+if [[ ${missing_native} -ne 0 ]]; then
+    echo "APK contains unresolved non-system native dependencies." | tee -a "${NATIVE_DEPS_LOG}"
+    echo "FAILED_STAGE=06-native-deps" | tee "${OUT_ROOT}/build-status.txt"
+    exit 29
+fi
+
+echo "All packaged ARM64 native dependencies resolve inside the APK or Android system libraries." \
+    | tee -a "${NATIVE_DEPS_LOG}"
+
 # KDE Craft/ECM commonly produces an unsigned APK. Sign a disposable test APK
 # so the artifact can be installed directly on a device for validation.
 SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
@@ -570,7 +724,6 @@ if [[ -n "${SDK_ROOT}" && -d "${SDK_ROOT}/build-tools" ]]; then
         KEYSTORE="${WORK_ROOT}/digikam-test.keystore"
         keytool -genkeypair -noprompt           -keystore "${KEYSTORE}"           -storepass android           -keypass android           -alias androiddebugkey           -keyalg RSA           -keysize 2048           -validity 10000           -dname "CN=digiKam Android Test,OU=Temp Build,O=Local,C=GB" >/dev/null 2>&1
 
-        SRC_APK="${APKS[0]}"
         ALIGNED="${WORK_ROOT}/digikam-${VERSION}-arm64-v8a-aligned.apk"
         SIGNED="${OUT_ROOT}/apk/digikam-${VERSION}-arm64-v8a-test-signed.apk"
         "${ZIPALIGN}" -p -f 4 "${SRC_APK}" "${ALIGNED}"
