@@ -10,6 +10,7 @@
 #include <QFont>
 #include <QGuiApplication>
 #include <QIcon>
+#include <QKeyEvent>
 #include <QMainWindow>
 #include <QMenu>
 #include <QMenuBar>
@@ -177,6 +178,10 @@ MobileUiAdapter* MobileUiAdapter::install(QMainWindow* window)
     adapter->resizeActiveDrawer();
 
     window->installEventFilter(adapter);
+    // Android Back is delivered to whichever child currently owns focus.
+    // Observe application events as well so an open navigation drawer can
+    // consume Back consistently before the app exits.
+    qApp->installEventFilter(adapter);
 
     return adapter;
 }
@@ -415,7 +420,7 @@ void MobileUiAdapter::resizeActiveDrawer()
 {
     const bool portrait = m_window->height() >= m_window->width();
     const int desired = portrait
-            ? qRound(m_window->width() * 0.82)
+            ? qRound(m_window->width() * 0.92)
             : qRound(m_window->width() * 0.46);
 
     const QList<Sidebar*> sidebars = m_window->findChildren<Sidebar*>();
@@ -431,6 +436,28 @@ void MobileUiAdapter::resizeActiveDrawer()
 
 bool MobileUiAdapter::eventFilter(QObject* watched, QEvent* event)
 {
+    if (event->type() == QEvent::KeyPress)
+    {
+        QKeyEvent* const keyEvent = static_cast<QKeyEvent*>(event);
+
+        if ((keyEvent->key() == Qt::Key_Back) ||
+            (keyEvent->key() == Qt::Key_Escape))
+        {
+            const QList<Sidebar*> sidebars =
+                    m_window->findChildren<Sidebar*>();
+
+            for (Sidebar* const sidebar : sidebars)
+            {
+                if (sidebar->isExpanded())
+                {
+                    collapseSidebars();
+                    keyEvent->accept();
+                    return true;
+                }
+            }
+        }
+    }
+
     if ((watched == m_window) &&
         ((event->type() == QEvent::Resize) ||
          (event->type() == QEvent::Show)))

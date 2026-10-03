@@ -285,6 +285,27 @@ else
     echo "libintl already present in ${CRAFT_ROOT}/lib"
 fi
 
+stage "Ensure Android PCRE2 runtime prerequisite"
+if ! compgen -G "${CRAFT_ROOT}/lib/libpcre2-8.*" >/dev/null || \
+   [[ ! -f "${CRAFT_ROOT}/lib/pkgconfig/libpcre2-8.pc" ]]; then
+    echo "PCRE2 is missing/incomplete in the cached Android prefix; force-rebuilding it."
+    run_logged "00-install-pcre2" craft -i libs/pcre2
+
+    if ! compgen -G "${CRAFT_ROOT}/lib/libpcre2-8.*" >/dev/null; then
+        echo "PCRE2 rebuild completed but libpcre2-8 is still missing." >&2
+        find "${CRAFT_ROOT}" -maxdepth 5 -iname '*pcre2*' -print || true
+        exit 15
+    fi
+
+    if [[ ! -f "${CRAFT_ROOT}/lib/pkgconfig/libpcre2-8.pc" ]]; then
+        echo "PCRE2 library exists but libpcre2-8.pc is missing; locating metadata." >&2
+        find "${CRAFT_ROOT}" -maxdepth 6 -name 'libpcre2-8.pc' -print || true
+        exit 16
+    fi
+else
+    echo "PCRE2 already present and complete in ${CRAFT_ROOT}"
+fi
+
 run_logged "01-install-deps" craft --options "${CRAFT_OPT}" --install-deps digikam
 run_logged "02-configure" craft --options "${CRAFT_OPT}" --configure digikam
 run_logged "03-compile" craft --options "${CRAFT_OPT}" --compile digikam
