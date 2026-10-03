@@ -17,7 +17,10 @@ mobile_template = port_root / "mobile"
 if not (src / "core").is_dir():
     raise SystemExit(f"Not a digiKam source tree: {src}")
 
-# 1. Add KDE/ECM Android APK packaging to the existing digiKam executable.
+# 1. Locate the existing digiKam target. APK packaging for this Qt5 port is
+# provided by ECM's Android toolchain (ECMAndroidDeployQt5) through the
+# QTANDROID_EXPORTED_TARGET/ANDROID_APK_DIR variables supplied by Craft.
+# ECMAddAndroidApk is a Qt6 API and must not be injected into this Qt5 build.
 target_file = src / "core" / "app" / "DigikamTarget.cmake"
 if not target_file.exists():
     matches = list(src.rglob("DigikamTarget.cmake"))
@@ -26,16 +29,6 @@ if not target_file.exists():
     target_file = matches[0]
 
 text = target_file.read_text(encoding="utf-8")
-marker = "ecm_add_android_apk(digikam"
-if marker not in text:
-    text += """
-# Android packaging layer (temporary downstream port).
-if(ANDROID)
-    include(ECMAddAndroidApk)
-    ecm_add_android_apk(digikam ANDROID_DIR ${CMAKE_CURRENT_SOURCE_DIR}/android)
-endif()
-"""
-    target_file.write_text(text, encoding="utf-8")
 
 # Android builds add a thin adaptive mobile shell while keeping digiKam's
 # existing data/model/image pipeline intact.
