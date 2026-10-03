@@ -784,7 +784,7 @@ while IFS= read -r binary; do
     fi
 done < <(find "${APK_PATCH_LIB}" -type f -name '*.so' -print | sort)
 
-for runtime_name in libglib-2.0.so libinih.so libINIReader.so; do
+for runtime_name in libglib-2.0.so libinih.so libINIReader.so libsqlite3.so; do
     runtime_src="${CRAFT_ROOT}/lib/${runtime_name}"
 
     if [[ ! -f "${runtime_src}" ]]; then
