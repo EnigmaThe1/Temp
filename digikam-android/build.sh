@@ -569,6 +569,22 @@ run_logged "02-configure" craft --options "${CRAFT_OPT}" --configure digikam
 run_logged "03-compile" craft --options "${CRAFT_OPT}" --compile digikam
 run_logged "04-install" craft --options "${CRAFT_OPT}" --install digikam
 
+stage "Ensure critical SQLite runtime"
+SQLITE_RUNTIME="${CRAFT_ROOT}/lib/libsqlite3.so"
+if [[ ! -e "${SQLITE_RUNTIME}" ]]; then
+    echo "libsqlite3.so is missing from the Android prefix; installing KDE Craft's pinned SQLite package."
+    run_logged "00-install-sqlite" craft -i libs/sqlite
+fi
+
+if [[ ! -e "${SQLITE_RUNTIME}" ]]; then
+    echo "SQLite installation completed but ${SQLITE_RUNTIME} is still missing." >&2
+    echo "SQLite files in the Android prefix:" >&2
+    find "${CRAFT_ROOT}" -maxdepth 5 -iname '*sqlite*' -print >&2 2>/dev/null || true
+    exit 30
+fi
+
+echo "SQLite runtime verified: ${SQLITE_RUNTIME}"
+
 # Keep the proven digiKam compile/link path untouched. Normalize only the
 # finished Android ELF runtime immediately before APK deployment.
 stage "Normalize versioned Android runtime libraries"
@@ -794,6 +810,44 @@ fi
 
 echo "All packaged ARM64 native dependencies resolve inside the APK or Android system libraries." \
     | tee -a "${NATIVE_DEPS_LOG}"
+
+stage "Validate critical digiKam Android plugins"
+APK_ENTRIES="${LOG_ROOT}/apk-entries.txt"
+unzip -Z1 "${SRC_APK}" | sort > "${APK_ENTRIES}"
+
+if ! grep -Eq '^lib/arm64-v8a/.*qsqlite.*\.so# so the artifact can be installed directly on a device for validation.
+SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+if [[ -n "${SDK_ROOT}" && -d "${SDK_ROOT}/build-tools" ]]; then
+    BUILD_TOOLS="$(find "${SDK_ROOT}/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n1)"
+    ZIPALIGN="${BUILD_TOOLS}/zipalign"
+    APKSIGNER="${BUILD_TOOLS}/apksigner"
+    if [[ -x "${ZIPALIGN}" && -x "${APKSIGNER}" ]]; then
+        KEYSTORE="${WORK_ROOT}/digikam-test.keystore"
+        keytool -genkeypair -noprompt           -keystore "${KEYSTORE}"           -storepass android           -keypass android           -alias androiddebugkey           -keyalg RSA           -keysize 2048           -validity 10000           -dname "CN=digiKam Android Test,OU=Temp Build,O=Local,C=GB" >/dev/null 2>&1
+
+        ALIGNED="${WORK_ROOT}/digikam-${VERSION}-arm64-v8a-aligned.apk"
+        SIGNED="${OUT_ROOT}/apk/digikam-${VERSION}-arm64-v8a-test-signed.apk"
+        "${ZIPALIGN}" -p -f 4 "${SRC_APK}" "${ALIGNED}"
+        "${APKSIGNER}" sign           --ks "${KEYSTORE}"           --ks-key-alias androiddebugkey           --ks-pass pass:android           --key-pass pass:android           --out "${SIGNED}"           "${ALIGNED}"
+        "${APKSIGNER}" verify --verbose "${SIGNED}" | tee "${LOG_ROOT}/apksigner-verify.log"
+        rm -f "${KEYSTORE}" "${ALIGNED}"
+    else
+        echo "zipalign/apksigner not found; leaving unsigned APK only" | tee "${LOG_ROOT}/signing-warning.log"
+    fi
+fi
+
+sha256sum "${OUT_ROOT}"/apk/*.apk | tee "${OUT_ROOT}/SHA256SUMS.txt"
+echo "SUCCESS" | tee "${OUT_ROOT}/build-status.txt"
+stage "Done"
+find "${OUT_ROOT}" -maxdepth 3 -type f -printf '%p %k KB\n' | sort
+ "${APK_ENTRIES}"; then
+    echo "The APK does not contain the Qt QSQLite driver required by digiKam's database." >&2
+    grep -i 'sqlite' "${APK_ENTRIES}" >&2 || true
+    echo "FAILED_STAGE=07-critical-plugins" | tee "${OUT_ROOT}/build-status.txt"
+    exit 31
+fi
+
+echo "Critical Qt QSQLite driver is packaged." | tee "${LOG_ROOT}/critical-plugins.log"
 
 # KDE Craft/ECM commonly produces an unsigned APK. Sign a disposable test APK
 # so the artifact can be installed directly on a device for validation.
