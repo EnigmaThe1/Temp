@@ -528,6 +528,12 @@ rm -rf "${CRAFT_ROOT}/build/libs/qt5/qtmultimedia/work"
 
 run_logged "01-install-deps" craft --options "${CRAFT_OPT}" --install-deps digikam
 
+run_logged "02-configure" craft --options "${CRAFT_OPT}" --configure digikam
+run_logged "03-compile" craft --options "${CRAFT_OPT}" --compile digikam
+run_logged "04-install" craft --options "${CRAFT_OPT}" --install digikam
+
+# Keep the proven digiKam compile/link path untouched. Normalize only the
+# finished Android ELF runtime immediately before APK deployment.
 stage "Normalize versioned Android runtime libraries"
 PATCHELF="${CRAFT_ROOT}/dev-utils/bin/patchelf"
 if [[ ! -x "${PATCHELF}" ]]; then
@@ -654,9 +660,6 @@ patch_needed_if_present "${CRAFT_ROOT}/lib/libINIReader.so" "libinih.so.0" "libi
 # linked digiKam libraries will see the normalized SONAMEs above.
 rewrite_versioned_needed_tree "${CRAFT_ROOT}/lib"
 
-run_logged "02-configure" craft --options "${CRAFT_OPT}" --configure digikam
-run_logged "03-compile" craft --options "${CRAFT_OPT}" --compile digikam
-run_logged "04-install" craft --options "${CRAFT_OPT}" --install digikam
 
 stage "Create APK target"
 set +e
