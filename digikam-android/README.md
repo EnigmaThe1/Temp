@@ -8,7 +8,7 @@ The workflow downloads the official digiKam 9.1.0 source tarball from KDE at bui
 
 ## Strategy
 
-- KDE's official Qt 6.11 Android Craft container.
+- Pinned KDE Craft Qt 5.15.5 / KF5 Android arm64 toolchain image.
 - arm64-v8a first.
 - Keep digiKam's upstream database, metadata, thumbnail, face, search, map and image-processing core.
 - Do **not** ship the desktop window unchanged on a phone.

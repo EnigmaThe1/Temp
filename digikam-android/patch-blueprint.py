@@ -16,6 +16,20 @@ text = text.replace(
     '        elif not CraftCore.compiler.isAndroid:\n            self.runtimeDependencies["libs/qt/qtwebengine"] = None',
 )
 
+# The upstream digiKam Craft recipe adds the Plasma Breeze desktop style
+# unconditionally. That brings desktop KCM dependencies into Android and
+# fails at KF5KCMUtils. Keep Breeze on desktop and omit it only on Android.
+breeze_dep = '        self.runtimeDependencies["kde/plasma/breeze"] = None\n'
+breeze_guard = '''        if not CraftCore.compiler.isAndroid:
+            # Plasma Breeze is a desktop Qt Widgets style. Android uses the
+            # platform/mobile presentation layer instead.
+            self.runtimeDependencies["kde/plasma/breeze"] = None
+'''
+if breeze_guard not in text:
+    if breeze_dep not in text:
+        raise SystemExit("Could not locate digiKam Plasma Breeze dependency")
+    text = text.replace(breeze_dep, breeze_guard, 1)
+
 # The first Android build uses SQLite only.
 text = text.replace(
     '        self.runtimeDependencies["binary/mysql"] = None',
