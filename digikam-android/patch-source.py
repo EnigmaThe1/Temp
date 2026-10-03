@@ -294,18 +294,31 @@ for rel, target_name in (
 ):
     cmake_file = src / rel
     cmake_text = cmake_file.read_text(encoding="utf-8")
-    pattern = re.compile(
-        r"\n?target_link_libraries\(\s*"
+    cmake_lines = cmake_text.splitlines()
+    filtered_lines = [
+        line
+        for line in cmake_lines
+        if "::WebEngineWidgets" not in line
+    ]
+
+    if len(filtered_lines) == len(cmake_lines):
+        raise SystemExit(
+            f"Could not locate WebEngine link entry for {target_name} in {cmake_file}"
+        )
+
+    cmake_text = "\n".join(filtered_lines) + "\n"
+
+    # If WebEngine was the only item in a dedicated link block, removing its
+    # line leaves an empty target_link_libraries call. Drop only that empty
+    # call; larger link blocks retain every other dependency unchanged.
+    cmake_text = re.sub(
+        r"target_link_libraries\(\s*"
         + re.escape(target_name)
-        + r"\s+PRIVATE\s+Qt[^\s\)]*::WebEngineWidgets\s*\)\s*",
+        + r"\s+PRIVATE\s*\)\s*",
+        "",
+        cmake_text,
         flags=re.MULTILINE,
     )
-    cmake_text, count = pattern.subn("\n", cmake_text, count=1)
-
-    if count != 1:
-        raise SystemExit(
-            f"Could not remove WebEngine link block for {target_name} in {cmake_file}"
-        )
 
     cmake_file.write_text(cmake_text, encoding="utf-8")
 
