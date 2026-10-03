@@ -37,10 +37,12 @@ mobile_sources_marker = "main/mobileuiadapter.cpp"
 if mobile_sources_marker not in text:
     text += """
 if(ANDROID)
+    find_package(Qt5 REQUIRED COMPONENTS AndroidExtras)
     target_sources(digikam PRIVATE
         main/mobileuiadapter.cpp
         main/mobileuiadapter.h
     )
+    target_link_libraries(digikam PRIVATE Qt5::AndroidExtras)
 endif()
 """
     target_file.write_text(text, encoding="utf-8")

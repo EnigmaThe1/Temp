@@ -10,6 +10,7 @@
 #include <QFont>
 #include <QGuiApplication>
 #include <QIcon>
+#include <QAndroidJniObject>
 #include <QKeyEvent>
 #include <QMainWindow>
 #include <QMenu>
@@ -18,11 +19,14 @@
 #include <QScroller>
 #include <QSize>
 #include <QSizePolicy>
+#include <QStringList>
 #include <QStatusBar>
 #include <QStyle>
 #include <QToolBar>
 #include <QToolButton>
 #include <QWidget>
+
+#include <QtAndroid>
 
 #include "sidebar.h"
 
@@ -62,6 +66,48 @@ protected:
         return QObject::eventFilter(watched, event);
     }
 };
+
+void requestMediaPermissions()
+{
+    const int sdk = static_cast<int>(
+        QAndroidJniObject::getStaticField<jint>(
+            "android/os/Build$VERSION",
+            "SDK_INT"
+        )
+    );
+
+    QStringList permissions;
+
+    if (sdk >= 33)
+    {
+        permissions
+            << QStringLiteral("android.permission.READ_MEDIA_IMAGES")
+            << QStringLiteral("android.permission.READ_MEDIA_VIDEO");
+    }
+    else if (sdk >= 23)
+    {
+        permissions
+            << QStringLiteral("android.permission.READ_EXTERNAL_STORAGE");
+    }
+
+    QStringList denied;
+
+    for (const QString& permission : permissions)
+    {
+        if (QtAndroid::checkPermission(permission) ==
+            QtAndroid::PermissionResult::Denied)
+        {
+            denied << permission;
+        }
+    }
+
+    if (!denied.isEmpty())
+    {
+        // Bound the synchronous wait so a broken permission callback can never
+        // hang digiKam startup indefinitely.
+        QtAndroid::requestPermissionsSync(denied, 30000);
+    }
+}
 
 QString mobileStyleSheet()
 {
@@ -147,6 +193,10 @@ void MobileUiAdapter::prepareApplication(QApplication* app)
     {
         return;
     }
+
+    // Android 6+ requires dangerous storage/media permissions to be granted
+    // at runtime; manifest declarations alone are not enough.
+    requestMediaPermissions();
 
     QFont f = app->font();
 
